@@ -52,7 +52,7 @@ def safe_extract_zip(archive: Path, destination: Path) -> None:
             target = (destination / info.filename).resolve()
             if target != root and root not in target.parents:
                 raise ValueError(f"Unsafe path in archive: {info.filename}")
-            if info.is_symlink():
+            if ((getattr(info, "external_attr", 0) >> 16) & 0o170000) == 0o120000:
                 raise ValueError(f"Symlinks are not allowed in llama.cpp archive: {info.filename}")
         zf.extractall(destination)
 
