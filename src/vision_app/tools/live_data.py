@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import csv
-import io
+from datetime import datetime, timezone
+from urllib.parse import quote
 from typing import Any
 
 import httpx
@@ -119,36 +119,57 @@ def get_weather(args: schemas.GetWeatherArgs) -> dict[str, Any]:
     }
 
 
-def get_stock_price(args: schemas.GetStockPriceArgs) -> dict[str, Any]:
-    symbol = args.ticker.strip().lower()
-    query_symbol = symbol if ("." in symbol or symbol.startswith("^")) else f"{symbol}.us"
-    with _client() as client:
-        response = client.get("https://stooq.com/q/l/", params={"s": query_symbol, "f": "sd2t2ohlcv", "h": "", "e": "csv"})
-        response.raise_for_status()
-        text = response.text
-    rows = list(csv.DictReader(io.StringIO(text)))
-    if not rows or not rows[0].get("Close") or rows[0]["Close"] == "N/D":
-        raise RuntimeError(f"No quote found for ticker {args.ticker}")
-    row = rows[0]
+def parse_yahoo_chart(payload: dict[str, Any], ticker: str) -> dict[str, Any]:
+    chart = payload.get("chart") or {}
+    if chart.get("error"):
+        raise RuntimeError(str(chart["error"]))
+    results = chart.get("result") or []
+    if not results:
+        raise RuntimeError(f"No quote found for ticker {ticker}")
+    result = results[0] or {}
+    meta = result.get("meta") or {}
+    quote_data = (((result.get("indicators") or {}).get("quote") or [{}])[0] or {})
 
-    def number(key: str):
-        try:
-            return float(row[key]) if row.get(key) not in (None, "", "N/D") else None
-        except ValueError:
-            return None
+    def last_number(key: str):
+        values = quote_data.get(key) or []
+        for value in reversed(values):
+            if value is not None:
+                return float(value)
+        return None
 
+    timestamp = meta.get("regularMarketTime")
     return {
-        "ticker": args.ticker.upper(),
-        "stooq_symbol": query_symbol,
-        "date": row.get("Date"),
-        "time": row.get("Time"),
-        "open": number("Open"),
-        "high": number("High"),
-        "low": number("Low"),
-        "close": number("Close"),
-        "volume": number("Volume"),
-        "source": "Stooq",
+        "ticker": str(meta.get("symbol") or ticker.upper()),
+        "name": meta.get("longName") or meta.get("shortName") or "",
+        "currency": meta.get("currency"),
+        "exchange": meta.get("fullExchangeName") or meta.get("exchangeName"),
+        "price": meta.get("regularMarketPrice"),
+        "previous_close": meta.get("chartPreviousClose") or meta.get("previousClose"),
+        "open": last_number("open"),
+        "high": meta.get("regularMarketDayHigh") or last_number("high"),
+        "low": meta.get("regularMarketDayLow") or last_number("low"),
+        "close": meta.get("regularMarketPrice") or last_number("close"),
+        "volume": meta.get("regularMarketVolume") or last_number("volume"),
+        "observed_at": datetime.fromtimestamp(float(timestamp), timezone.utc).isoformat() if timestamp else None,
+        "source": "Yahoo Finance chart API",
     }
+
+
+def get_stock_price(args: schemas.GetStockPriceArgs) -> dict[str, Any]:
+    symbol = quote(args.ticker.strip().upper(), safe=".-^=")
+    last_error: Exception | None = None
+    with _client() as client:
+        for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+            try:
+                response = client.get(
+                    f"https://{host}/v8/finance/chart/{symbol}",
+                    params={"range": "5d", "interval": "1d"},
+                )
+                response.raise_for_status()
+                return parse_yahoo_chart(response.json(), args.ticker)
+            except Exception as exc:
+                last_error = exc
+    raise RuntimeError(f"No quote found for ticker {args.ticker}: {last_error}")
 
 
 def _coingecko_id(symbol: str, client: httpx.Client) -> str:

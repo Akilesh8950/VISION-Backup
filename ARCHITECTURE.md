@@ -11,7 +11,7 @@ VISION — built by SPIRIT ORG
 │  Transcript (listview)   │   httpx AsyncClient ──SSE──┐             │
 │  Composer / Settings /   │   ToolRegistry (27 tools) │             │
 │  Wizard / GenUI widgets  │     ├─ live data (ddgs / Open-Meteo /    │
-│  Server console drawer   │     │    Stooq / CoinGecko)              │
+│  Server console drawer   │     │    Yahoo Finance / CoinGecko)              │
 │  Projects / Sources      │     ├─ projects + local knowledge (FTS) │
 │        ▲ signals         │     ├─ code & files (sandbox)            │
 │        └──────────────── │     ├─ memory (SQLite)                   │

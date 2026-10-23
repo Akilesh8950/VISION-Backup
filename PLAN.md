@@ -246,7 +246,7 @@ personal Windows PC, use for a real task, file every defect, fix blockers)
 | `web_search` | `ddgs` `DDGS().text(query, max_results=…)` | returns title/url/snippet list |
 | `get_news` | `ddgs` `DDGS().news(topic, max_results=limit)` | date/source/title/url |
 | `get_weather` | Open-Meteo geocoding `geocoding-api.open-meteo.com/v1/search` → forecast `api.open-meteo.com/v1/forecast` (current + today) | `units` enum `metric\|imperial` maps to `temperature_unit`/`wind_speed_unit`; strict enum, no silent aliasing (feeds schema-error metric genuinely) |
-| `get_stock_price` | Stooq CSV `stooq.com/q/l/?s=<sym>&f=sd2t2ohlcv&h&e=csv` | **A3:** ticker without a dot gets `.us` appended |
+| `get_stock_price` | Yahoo Finance chart API (`query1`/`query2`, 5d/1d) | **Deviation recorded during implementation:** the previously proposed Stooq CSV endpoint returned HTTP 404 / browser-verification HTML in live probes on 2026-10-23. Yahoo tickers use exchange suffixes such as `RELIANCE.NS`; no implicit `.us` suffix is added. |
 | `get_crypto_price` | CoinGecko `api.coingecko.com/api/v3/simple/price` | needs coin *id* (`bitcoin`), not symbol (`BTC`): built-in map for majors + `/search` fallback; 401/429 → clear tool error, **no silent provider switch** |
 | `lookup_docs` | `ddgs` text search `"<library> documentation <topic>"` | snippets + URLs only in v1; no page scraping |
 
@@ -311,7 +311,7 @@ exception → short `role:"tool"` error (never raises into the turn loop).
 
 - **A1 Git**: `git init` in this workspace; commits per milestone table above (needs a local git identity — supply name/email or approve a neutral local one). No remote, no binary blobs (GGUF/llama.cpp). Third-party bundle placeholder is git-ignored.
 - **A2 Python range**: code targets **3.11**; `requires-python = ">=3.11,<3.14"` so headless tests can also run on this sandbox's 3.13. Production README says 3.11.
-- **A3 Live-data details**: mapping in §7, including Stooq `.us` default, CoinGecko id map, snippets-only docs lookup.
+- **A3 Live-data details**: mapping in §7, including Yahoo Finance chart tickers (Stooq falsified live, see §7), CoinGecko id map, snippets-only docs lookup.
 - **A4 Tool-schema caps/enums** (not in spec, needed for pydantic): `max_results≤10`, `limit≤20`, file read/write ≤1 MB text, `search_code` returns ≤200 matches, `set_timer.minutes` is `float, 0<·≤1440`, chart `values:list[float]` (len == labels; pie values ≥0; **scatter**: x = float(label) if numeric else index), `ui_cards` item = `{title, value?, body?, footer?}`, `ui_timeline` item = `{time, title, description?}`, `ui_table` rows must match `columns` length.
 - **A5 llama.cpp download variant**: pin a tested tag (start: b11819, not floating "latest"). Detect: NVIDIA (`nvidia-smi` present) → CUDA 12.4 x64 build zip + matching `cudart` zip; else Vulkan x64; user can override in wizard. ARM64 → matching ARM64 asset. Bundled/`third_party` copy always wins over download.
 - **A6 Attach file**: v1 = text/code files only, UTF-8, ≤ 256 KB, inserted as a fenced block + filename into the user message; binaries/images rejected with an inline notice. Rationale: the verified GGUF repo contains no mmproj, so genuine image input is impossible under the frozen contract.

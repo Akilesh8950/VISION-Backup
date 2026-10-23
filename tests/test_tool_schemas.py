@@ -73,3 +73,23 @@ def test_genui_chart_payload(tmp_path):
     ))
     assert result.genui["kind"] == "chart"
     assert result.genui["values"] == [1.0, 4.0, 9.0, 16.0]
+
+
+def test_yahoo_stock_parser():
+    from vision_app.tools.live_data import parse_yahoo_chart
+
+    payload = {
+        "chart": {
+            "result": [{
+                "meta": {
+                    "symbol": "AAPL", "currency": "USD", "regularMarketPrice": 347.5,
+                    "chartPreviousClose": 343.4, "regularMarketVolume": 100,
+                    "regularMarketTime": 1792764278, "fullExchangeName": "NasdaqGS",
+                },
+                "indicators": {"quote": [{"open": [340.0], "high": [350.0], "low": [339.0], "close": [347.5], "volume": [100]}]},
+            }]
+        }
+    }
+    result = parse_yahoo_chart(payload, "AAPL")
+    assert result["price"] == 347.5
+    assert result["source"].startswith("Yahoo Finance")
