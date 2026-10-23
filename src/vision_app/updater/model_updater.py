@@ -37,7 +37,18 @@ def fetch_remote_model_info(token: str = "", api_factory=None) -> dict[str, Any]
         return info
     siblings = []
     for item in getattr(info, "siblings", []) or []:
-        siblings.append(item.model_dump() if hasattr(item, "model_dump") else dict(item))
+        if hasattr(item, "model_dump"):
+            siblings.append(item.model_dump())
+        elif isinstance(item, dict):
+            siblings.append(item)
+        else:
+            siblings.append(
+                {
+                    "rfilename": getattr(item, "rfilename", ""),
+                    "size": getattr(item, "size", 0),
+                    "lfs": {"size": getattr(getattr(item, "lfs", None), "size", 0)},
+                }
+            )
     return {"sha": getattr(info, "sha", ""), "siblings": siblings}
 
 

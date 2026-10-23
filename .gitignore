@@ -8,5 +8,6 @@ dist/
 bench/runs/*
 !bench/runs/.gitkeep
 third_party/llama.cpp/
+src/vision_app/_build_info.py
 *.gguf
 .env
