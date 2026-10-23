@@ -2,11 +2,18 @@
 
 VISION — built by SPIRIT ORG
 
-VISION DESKTOP is a native Windows chat client and tool runtime for the local
+VISION DESKTOP is a Windows chat client and tool runtime for the local
 `VISION` LLM. It runs `llama-server` as a managed child process, streams
-OpenAI-compatible responses, exposes a validated tool runtime, renders native
+OpenAI-compatible responses, exposes a validated tool runtime, renders
 generative-UI widgets, and supports portable Skills, MCP servers and custom
 remote-MCP connectors.
+
+The default interface is local HTML/CSS/JS in `app/web/`, hosted by pywebview
+and Microsoft Edge WebView2. It is deliberately not an Electron app and has no
+Node build step, bundler, JS framework, CDN dependency or business logic in
+JavaScript. `src/vision_app/web_bridge.py` is a thin adapter over the same
+Python services used by the previous Qt interface. The Qt interface remains
+available as a rollback and advanced-management surface with `--qt`.
 
 ## Frozen model and inference contract
 
@@ -37,15 +44,42 @@ python -m pip install -e . --no-deps
 python -m vision_app
 ```
 
-On first launch, the wizard can:
+Windows 11 normally provides the Microsoft Edge WebView2 Runtime. If the
+window cannot start on a stripped Windows installation, install Microsoft's
+Evergreen WebView2 Runtime and launch again.
 
-1. download a pinned supported Windows `llama-server` build;
-2. download and size-verify the 5.24 GiB GGUF;
+On first launch, the setup sheet can:
+
+1. download the 5.24 GiB GGUF;
+2. download a pinned supported Windows `llama-server` build;
 3. set GPU layers;
 4. start the local server and wait for `/v1/models` health.
 
-You can skip the wizard and configure paths manually in **Settings → Model &
-Server**.
+You can skip setup and configure paths manually in **Settings → Model &
+server**.
+
+Useful launch forms:
+
+```powershell
+python -m vision_app          # default WebView2 interface
+python -m vision_app --debug  # WebView2 interface with pywebview debug enabled
+python -m vision_app --qt     # legacy PySide6 rollback interface
+```
+
+### Offline frontend
+
+Everything the web interface needs is in the repository:
+
+- `app/web/index.html`, `app/web/styles/`, and ES modules in `app/web/js/`;
+- three.js 0.186.1, anime.js 4.5.0, Chart.js 4.6.1 and the Chart.js
+  dependency `@kurkle/color` 0.3.4 under `app/web/vendor/`;
+- local import-map entries for the vendored modules;
+- `app/web/screenshots.html`, a direct-open gallery for reviewing component
+  states without a running model.
+
+Three.js is vendored as requested but intentionally not loaded by the current
+2D interface. After the model/server have been downloaded, disconnecting the
+network must not blank or degrade the interface.
 
 ## Data locations
 
@@ -74,8 +108,9 @@ and MCP/connector credentials use Windows Credential Manager on Windows.
 
 - streaming responses with Stop and Regenerate
 - collapsible `<think>` reasoning in muted styling
-- Markdown, syntax-highlighted code, copy actions and inline correction
-- LOCAL/CLOUD endpoint chip, health/failover banner and server console drawer
+- Markdown, code blocks with copy buttons, citations and a source inspector
+- Ctrl+K command palette, Ctrl+Enter regenerate, and Esc to cancel a stream
+- LOCAL/CLOUD endpoint chip, health/failover banner and a server console sheet
 - text attachments, `/fix`, `/teach`, thumbs-down feedback and export
 - SQLite history and persistent memory keys
 
@@ -87,23 +122,27 @@ for guarded public web-page reading and citations. Tool arguments are
 validated with pydantic/JSON Schema before execution; failures return a
 corrective `role:"tool"` message so the model can retry.
 
-Generative UI tools render natively:
+Generative UI tools render as local web components:
 
-- sortable table with CSV/PNG export
-- QtCharts bar/line/pie/scatter chart with PNG export
+- sortable sticky-header table
+- Chart.js bar/line/pie/scatter chart
 - cards, vertical timeline, side-by-side diff
+- PNG and CSV export on every widget type
 
 ### Projects, local knowledge and code mode
 
 Projects provide instructions, a root folder, conversation assignment,
 extension scoping and knowledge sources. Selected documents/code are indexed
 locally with SQLite FTS5 and cited as `[L1]`, `[L2]`, etc. Supported baseline
-knowledge files include text/Markdown/code, PDF and DOCX.
+knowledge files include text/Markdown/code, PDF and DOCX. The web interface
+selects the active project and uses its indexed sources during chat.
 
 Code mode provides a project tree and preview, checkpointed overwrites,
 restore, read-only Git status and user-defined argv test profiles. Test
-profiles are started only by the user from the UI — they are not model tools,
-and there is no shell or Git-mutation tool.
+profiles are started only by the user — they are not model tools,
+and there is no shell or Git-mutation tool. In this first web migration,
+project/code management screens remain available through the `--qt` legacy
+surface; the backend services and data are shared.
 
 ## Skills
 
@@ -118,7 +157,7 @@ skill-name/
 ```
 
 `SKILL.md` begins with YAML frontmatter containing at least `name` and
-`description`. Imports accepted in **Extensions → Skills**:
+`description`. Imports accepted in **Settings → Extensions**:
 
 - a canonical folder;
 - a lone `SKILL.md`;
@@ -134,11 +173,14 @@ Full instructions load when the user selects a skill or the model calls
 ## MCP and Connectors
 
 VISION is an MCP host for stdio and Streamable HTTP servers. Legacy SSE is
-available as a transport record if a named server requires it. Add servers in
-**Extensions → MCP Servers**, run **Test/discover**, review the tool list and
-fingerprint, then explicitly trust that toolset. External tools default to
-**Ask every time**. A changed tool description/schema changes the fingerprint
-and requires re-approval before the tool is registered again.
+available as a transport record if a named server requires it. In the web
+interface, open **Settings → Extensions**, run **Discover / trust** for a
+configured server, review the tool list and fingerprint, then explicitly trust
+that toolset. Server/connector record editing remains available in the legacy
+`--qt` surface and the JSON files under `%LOCALAPPDATA%\VISION\extensions\`.
+External tools default to **Ask every time**. A changed tool
+description/schema changes the fingerprint and requires re-approval before
+the tool is registered again.
 
 Safety boundaries:
 
@@ -150,7 +192,7 @@ Safety boundaries:
 - remote calls display the server and arguments in tool/approval cards.
 
 A baseline **Connector** is a named remote MCP endpoint with none/API-key/
-Bearer auth in **Extensions → Connectors**. OAuth and first-party named
+Bearer auth. OAuth and first-party named
 service adapters are deliberately separate integrations; they are not bundled
 or implied by the custom connector feature.
 
@@ -197,13 +239,47 @@ dist\VISION\VISION.exe
 ```
 
 The script uses a one-folder PyInstaller build, `assets\vision.ico` and
-`assets\version_info.txt`.
+`assets\version_info.txt`. It bundles `app\web` and fails if
+`app\web\index.html` is missing from the output. Launch the packaged EXE from
+outside the repository to prove that it is not accidentally reading frontend
+files from the source tree.
 
-## Tests and falsification bench
+## Test instructions
+
+Run the automated checks from the repository root:
 
 ```powershell
 python -m pytest
+python -m ruff check src tests
+python -m compileall -q src scripts tests
 python scripts\run_bench.py --mode replay
+```
+
+Node is **not** a runtime or build requirement. If Node happens to be
+installed, these read-only syntax checks are a useful extra:
+
+```powershell
+Get-ChildItem app\web\js\*.js | ForEach-Object { node --check $_.FullName }
+```
+
+Review the visual states without a model by opening
+`app\web\screenshots.html`. To test the real ES-module graph over HTTP in a
+browser (without the Python bridge), run:
+
+```powershell
+cd app\web
+python -m http.server 8000 --bind 127.0.0.1
+```
+
+Then open `http://127.0.0.1:8000/` and
+`http://127.0.0.1:8000/screenshots.html`. The app page will announce Preview
+mode because `window.pywebview` is absent; use the desktop launch for chat.
+In browser DevTools → Network, reload and confirm every script/style request
+is same-origin/local and there are no CDN requests.
+
+For the managed local inference endpoint:
+
+```powershell
 python scripts\probe_server.py --base-url http://127.0.0.1:8080/v1
 ```
 
@@ -213,15 +289,25 @@ and tool-choice defects. Extension consent violations are a zero-tolerance
 release blocker. See `docs\QUALITY_RATCHET.md`.
 
 Windows-only behaviour must also pass `docs\WINDOWS_SMOKE_TEST.md` on real
-hardware before a release claim; headless tests cannot prove VRAM behaviour,
-Qt rendering on the target GPU stack, pywin32 window focus, or a real GGUF's
+hardware before a release claim; headless tests cannot prove WebView2/native
+dialog behaviour, VRAM behaviour, pywin32 window focus, or a real GGUF's
 tool-call stream.
 
 ## Troubleshooting
 
+### Blank window or WebView2 will not start
+
+- Confirm the Microsoft Edge WebView2 Runtime is installed.
+- Run `python -m vision_app --debug` and capture the console error.
+- From the source tree, confirm `app\web\index.html` exists. For a custom
+  layout, set `VISION_WEB_DIR` to the directory containing `index.html`.
+- Use `python -m vision_app --qt` as the rollback while collecting the
+  WebView2 error; both interfaces use the same data directory.
+
 ### Server exits immediately / CUDA or VRAM errors
 
-- Open **Server console** (`Ctrl+Shift+S`) and read the last lines.
+- Open **Server** in the sidebar (or Ctrl+K → “Server console”) and read the
+  last lines.
 - Lower **Settings → GPU layers** from 99 (for example 30, 20 or 0) and restart.
 - Confirm the model path points to the complete 5.24 GiB GGUF.
 - For CUDA builds, make sure the llama.cpp build and matching CUDA runtime
@@ -242,8 +328,9 @@ the other service yourself and restart VISION's server.
 
 Unsigned local ML executables and large downloads can be quarantined. Download
 only from the official release/Hugging Face locations configured by the app,
-restore only files you expected, and verify the model size/path in Model
-Manager. A code-signed production installer is outside this source build.
+restore only files you expected, and verify the model size/path in
+**Settings → Model & server**. A code-signed production installer is outside
+this source build.
 
 ### Cloud failover does not work
 
@@ -255,14 +342,14 @@ Manager. A code-signed production installer is outside this source build.
 
 ### MCP tools do not appear
 
-- Enable the server and run **Test/discover**.
+- Enable the server record and run **Discover / trust** in Settings.
 - Trust the exact discovered fingerprint.
 - Check that the conversation's extension-tool cap has not truncated them.
 - If tools/schemas changed upstream, re-run discovery and approve again.
 
 ### A skill does not activate
 
-- Enable it in **Extensions → Skills**.
+- Enable it in **Settings → Extensions** and save settings.
 - Validate that the folder name equals frontmatter `name`.
 - Use `/skill-name` or `@skill-name` for explicit activation.
 - Skills containing non-Python executables may only partially work by design.

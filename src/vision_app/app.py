@@ -85,14 +85,14 @@ def build_services(paths: AppPaths | None = None) -> SimpleNamespace:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run_qt(argv: list[str]) -> int:
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     from .constants import PRODUCT_NAME
     from .ui.main_window import MainWindow
     from .ui.theme import stylesheet
 
-    app = QApplication(argv or sys.argv)
+    app = QApplication([sys.argv[0], *[arg for arg in argv if arg != "--qt"]])
     app.setApplicationName(PRODUCT_NAME)
     services = build_services()
     app.setStyleSheet(stylesheet(services.config.theme))
@@ -110,6 +110,17 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         pass
     return int(code)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--qt" in args:
+        return _run_qt(args)
+
+    from .web_bridge import run_web_app
+
+    services = build_services()
+    return run_web_app(services, debug="--debug" in args)
 
 
 if __name__ == "__main__":

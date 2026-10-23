@@ -1,101 +1,376 @@
-# VISION — Windows 11 Smoke Test
+# VISION — Windows 11 test and smoke instructions
 
-Run on a clean Windows 11 machine with Python 3.11 before calling a build a
-release. Record Windows build, GPU/driver, VRAM, llama.cpp tag, GGUF SHA and
-app commit with the results. A step is not "close enough" if it needs an
-undocumented workaround — file it as a defect.
+Run this on a real Windows 11 machine before calling a build a release. The
+headless/Linux test suite can prove Python logic and local frontend assets,
+but it cannot prove WebView2 rendering, Windows native dialogs, pywin32,
+Credential Manager, GPU/VRAM behaviour, or structured tool calls from the real
+5.24 GiB GGUF.
 
-## Install and first run
+Record with the results:
 
-1. Clone, create a Python 3.11 venv, run `pip install -r requirements.txt`,
-   then `pip install -e . --no-deps`.
-2. Run `python -m vision_app`; the first-run wizard appears.
-3. Download `llama-server`; confirm its detected build is `>= b11815`.
-4. Download the GGUF; confirm 5,629,108,640 bytes and at least 7 GB free-space
-   precheck behaviour. Health check reaches healthy with no UI freeze.
+- date/time and tester;
+- app Git commit;
+- Windows edition/build and display scaling;
+- Microsoft Edge WebView2 Runtime version (Windows Settings → Apps);
+- CPU, RAM, GPU, driver and VRAM;
+- llama.cpp build printed by the app;
+- GGUF path, byte size and, if practical, SHA-256;
+- source launch or packaged `dist\VISION\VISION.exe` launch;
+- every failed step, exact prompt, screenshot and relevant server-log tail.
 
-## Core chat and frozen inference assumptions
+A step is not “close enough” if it needs an undocumented workaround. Record it
+as a defect with the exact error text.
 
-5. Ask a simple question. Confirm tokens stream, `<think>` collapses/expands,
-   Markdown/code render, Stop leaves an incomplete-marked reply, and
-   Regenerate works.
-6. **Tool-wire falsification check:** ask "What's the weather in Coimbatore?"
-   Confirm the SSE arrives as structured `get_weather` tool call, a tool card
-   shows args/result, and the follow-up answer streams. If raw ChatML/XML tool
-   text appears as content, stop and record the exact stream — do not ship.
-7. Start with the approved server arguments, including `--flash-attn on`.
-   Confirm the argument parses and the server reaches healthy. If a future
-   llama.cpp build rejects it, capture stderr and stop for a new approved
-   command amendment.
+## 1. Clean source install
 
-## Definition-of-done scenarios
+Use a new folder and a Python 3.11 virtual environment:
 
-8. "Show CPU and RAM usage" triggers `system_status`; the artifact cards update
-   for at least 10 seconds without re-querying the model.
-9. "Draw a bar chart of 1,4,9,16" triggers `ui_chart`; confirm a real native
-   chart with four values and PNG export.
-10. Ask for a table from data in the prompt; sort a column and export CSV.
-11. "Remember my preferred city is Coimbatore" → `memory_set`; restart app;
-    ask for it → `memory_get` returns Coimbatore.
-12. Run approved Python `print(6*7)`; deny a second Python run and confirm the
-    conversation remains valid.
-13. Kill only the VISION-owned `llama-server` child from Task Manager mid-chat.
-    Confirm health state, one restart/banner, no history loss and no dead UI.
+```powershell
+git clone <repository-url> VISION-smoke
+cd VISION-smoke
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip install -e . --no-deps
+```
 
-## Windows tools and safety
+Confirm the installed bridge dependency and entry point resolve:
 
-14. `list_running_apps`, open Notepad, focus its window by title substring,
-    clipboard set/get (including a >2000-character confirmation), open a URL,
-    and set a 0.1-minute timer.
-15. Probe an outside-workspace write, a `..` path, an executable open and a
-    system-path write. Confirm approval/blocking messages show resolved paths.
-16. Ask the model to delete a file, kill a process and run a shell command.
-    There must be no such tools; unknown/hallucinated calls return
-    `Blocked by VISION safety policy`.
+```powershell
+python -c "import webview, vision_app; print('pywebview import OK')"
+python -c "from vision_app.web_bridge import find_web_dir; print(find_web_dir())"
+```
 
-## Endpoints and updater
+Expected: the second command prints the source tree's `app\web` folder.
 
-17. Configure a real remote `/v1`, make local health fail twice in Auto mode,
-    and confirm visible CLOUD failover only after remote health succeeds.
-18. Check model updates with installed/current/newer SHA fixtures where
-    possible. A downloaded update marks `pending_restart` and does not swap
-    mid-conversation.
+## 2. Automated checks
 
-## Extensions
+Run all of these from the repository root and save the output:
 
-19. Import the same sample skill as folder, `SKILL.md`, `.zip` and `.skill`;
-    activate each in clean installs and export one back out. Confirm import
-    executes no script.
-20. Add one trusted stdio MCP server and one Streamable HTTP MCP server.
-    Review the exact command/URL, discover tools, trust fingerprints, deny one
-    call, allow one call, then change a tool schema/description upstream and
-    confirm re-approval is required.
-21. Add a custom Connector, call a tool only after consent, revoke it and
-    confirm its stored credential no longer resolves.
-22. Attempt prompt injection through a local test MCP tool description/result
-    asking for clipboard or token access. Any action without explicit consent
-    is a release blocker.
+```powershell
+python -m pytest
+python -m ruff check src tests
+python -m compileall -q src scripts tests
+python scripts\run_bench.py --mode replay
+```
 
-## Selected feature bundle
+Expected:
 
-23. Create a Project, add text/PDF/DOCX sources, index, ask a sourced question,
-    click `[L#]` and land on the correct page/line source.
-24. Propose a code change, inspect the diff, apply through approved write, then
-    restore its checkpoint and verify byte identity.
-25. Save a user test profile (program + argv) and run it from Code mode.
-    Confirm the model has no callable way to run/edit that profile.
-26. Read a public URL, verify `[S#]` opens its source card, and test that a
-    loopback/private URL is blocked.
+- pytest exits 0;
+- Ruff reports no errors;
+- compileall exits 0;
+- replay bench reports no release-blocking defects.
 
-## Feedback and packaging
+Node is not required to run or build VISION. If it is already installed, run
+this extra read-only JavaScript syntax check:
 
-27. Trigger thumbs-down, `/fix`, `/teach`, a schema error and a Python error.
-    Inspect `telemetry\needs.jsonl`: exact six fields, no secrets or file/
-    clipboard contents. Test export as `feedback.jsonl`.
-28. With a write-capable test HF token and opt-in ON, upload. Confirm remote
-    rows are append-merged, then local rows clear. Repeat with an invalid
-    token and confirm local rows remain.
-29. Run `scripts\build.ps1`; launch `dist\VISION\VISION.exe` outside the repo,
-    repeat steps 5–10, and verify About shows version/build + credits.
-30. Run `python -m pytest` and `python scripts\run_bench.py --mode replay`;
-    attach both outputs and the live bench report to the release commit.
+```powershell
+Get-ChildItem app\web\js\*.js | ForEach-Object { node --check $_.FullName }
+```
+
+## 3. Offline frontend and visual review
+
+### 3.1 Component gallery
+
+Open `app\web\screenshots.html` directly in Edge/Chrome. Review:
+
+1. app frame, empty state, 264 px sidebar and floating composer;
+2. transcript, reasoning, streaming and incomplete states;
+3. running/success/error/expanded tool cards;
+4. table, chart, cards, timeline and diff;
+5. settings sheet, palette, confirmation, banners/toasts and sources;
+6. controls and endpoint chips.
+
+Use the gallery buttons to toggle dark/light and the 64 px sidebar. Tab
+through section 6 and confirm a visible 2 px accent focus ring.
+
+### 3.2 Real ES-module graph over HTTP
+
+In a separate PowerShell window:
+
+```powershell
+cd app\web
+python -m http.server 8000 --bind 127.0.0.1
+```
+
+Open these local URLs:
+
+- `http://127.0.0.1:8000/`
+- `http://127.0.0.1:8000/screenshots.html`
+
+The first page will say Preview mode because the pywebview bridge is absent in
+a normal browser. That is expected. Open DevTools (F12) → Network, reload,
+and confirm:
+
+- HTML, CSS, JS and vendor files are all `127.0.0.1` requests;
+- there are no CDN or other external script/style/font requests;
+- there are no 404s for `three.core.js`, `chunks/index.js` or
+  `kurkle-color.esm.js`;
+- the console has no module-resolution error for `@kurkle/color`.
+
+Stop the HTTP server with Ctrl+C.
+
+### 3.3 Offline relaunch
+
+After the model and llama-server are downloaded in section 4:
+
+1. disconnect Wi-Fi/Ethernet;
+2. close and relaunch VISION;
+3. confirm the full interface renders;
+4. ask for system status and a chart from values in the prompt;
+5. reconnect the network.
+
+Expected: the UI, local history, tools that do not need the internet, and
+Chart.js widgets still work. Live-data tools may report network errors.
+
+## 4. First run and local server
+
+Use an isolated data root for a true first-run test:
+
+```powershell
+$env:VISION_HOME = "$PWD\.smoke-data"
+python -m vision_app --debug
+```
+
+1. Confirm the frameless window opens at a usable size and can be dragged by
+   the titlebar, minimized, maximized/restored and closed with the custom
+   window controls.
+2. Confirm the setup sheet appears.
+3. Click **Download model**. Confirm progress updates, the app stays
+   responsive, and the finished GGUF is 5,629,108,640 bytes.
+4. Click **Download llama-server**. Confirm the detected build is at least
+   b11815 and marked supported.
+5. Set GPU layers. Start with 99 only if VRAM is sufficient; otherwise record
+   the value that works.
+6. Click **Start / health check** or **Finish**. Confirm the titlebar/server
+   status reaches Healthy with no UI freeze.
+7. Open **Server** and verify the command shape ends with:
+
+   ```text
+   --jinja --flash-attn on
+   ```
+
+8. Confirm logs are visible, and test Start/Stop/Restart.
+
+If the window is blank, record the console output, verify the WebView2
+Runtime installation, and try the rollback only as a diagnostic:
+
+```powershell
+python -m vision_app --qt
+```
+
+## 5. Core chat and streaming
+
+Run each prompt in a new or clearly named chat.
+
+1. `Explain VISION in two short paragraphs.`
+   - Tokens stream progressively.
+   - The streaming cursor pulses without the whole transcript jumping.
+   - Scroll up during generation: a **Jump to latest** pill appears; click it.
+   - Press Esc or the Stop button during a long answer. The partial answer
+     remains and is marked incomplete.
+2. Ask a question that produces reasoning. Confirm `<think>` is hidden behind
+   a muted Reasoning chip, expands/collapses smoothly, and is collapsed by
+   default after reopening the conversation.
+3. Ask for a Python code block. Confirm language label, horizontal scroll,
+   no page widening, and the copy button copies only the code.
+4. Use the message actions: copy, regenerate, thumbs-down and Correct this.
+   Also test Ctrl+Enter for regenerate.
+5. Type a long composer message. Confirm it grows to eight lines, then scrolls
+   internally; Enter sends and Shift+Enter inserts a line.
+6. Press Ctrl+K. Run commands for New chat, Settings, Server console, theme,
+   sidebar and an existing chat title.
+7. Collapse the sidebar. Confirm it is 64 px, icons remain usable, and the
+   state is acceptable after relaunch.
+8. Rename, pin/unpin, search and delete a disposable conversation.
+9. Attach a small `.txt` file with the paperclip and ask a question about it.
+   Confirm the source file is opened by the native picker and the chip can be
+   removed before sending. Test a file larger than 256 KB and confirm a safe
+   visible error rather than a crash.
+
+## 6. Frozen tool-call and widget checks
+
+### 6.1 Structured tool-call falsification check
+
+Ask:
+
+```text
+What's the weather in Coimbatore?
+```
+
+Confirm:
+
+- a `get_weather` tool card appears;
+- arguments are shown as one-line JSON and expand to the full result;
+- a follow-up answer streams;
+- no raw ChatML/XML tool-call text appears as assistant content.
+
+If raw tool syntax appears as content, stop the release test and save the
+exact server/SSE evidence. Do not work around it in the UI.
+
+### 6.2 Real suggestion chips and tools
+
+From an empty chat, click each suggestion in separate chats:
+
+- Weather in Coimbatore → `get_weather`;
+- System status → `system_status` tool card plus CPU/RAM/disk/GPU cards;
+- Draw a chart → `ui_chart` with values 1, 4, 9, 16;
+- Open an app → `open_app` for Notepad.
+
+Ask one combined prompt such as “Show system status and Coimbatore weather.”
+Confirm parallel tool cards stack neatly and finish independently.
+
+### 6.3 Every generative widget
+
+Ask the model to create, or use prompts that trigger:
+
+1. `ui_table`: sort each column; export PNG and CSV; open both files.
+2. `ui_chart`: test bar and, where the model selects them, line/pie/scatter;
+   export PNG and CSV.
+3. `ui_cards`: export PNG and CSV.
+4. `ui_timeline`: export PNG and CSV.
+5. `ui_code_diff`: confirm green/red gutters and both line-number columns;
+   export PNG and CSV.
+
+Repeat one chart/table test in light theme and with the window narrowed.
+
+## 7. Sources and local knowledge
+
+1. Ask a current-events or documentation question that uses web tools.
+   Confirm `[S#]` chips appear in the answer.
+2. Click a citation and the message's Sources button. Confirm the right-hand
+   inspector highlights the correct source and the external-open button uses
+   the system browser.
+3. Use the legacy surface or existing data to create/index a Project source if
+   needed, return to the web UI, select the Project, and ask a question whose
+   answer is only in that source. Confirm `[L#]`, locator text and opening the
+   local source.
+4. Read a public URL with `read_url`; verify its source card. Confirm a
+   loopback/private-network URL is blocked by policy.
+
+## 8. Windows tools and safety
+
+Test with disposable files only:
+
+1. `list_running_apps`, open Notepad, focus it by title substring, open a URL;
+2. clipboard set/get with a short value;
+3. clipboard set with more than 2,000 characters and confirm approval;
+4. set a 0.1-minute timer and confirm the toast/banner fires;
+5. remember a harmless preference, restart, and ask for it back;
+6. run approved Python `print(6*7)`; deny a second run and confirm the chat
+   remains usable;
+7. attempt an outside-workspace write, a `..` path and opening an executable.
+   Deny each confirmation once and approve only a disposable safe case.
+   Confirm absolute paths are shown before writes;
+8. attempt a system-path write and confirm it is blocked;
+9. ask the model to delete a file, kill a process, edit the registry or run a
+   shell command. There must be no such tools; blocked/hallucinated calls
+   must return `Blocked by VISION safety policy` without side effects.
+
+## 9. Settings, endpoint failover and updates
+
+1. Open every Settings tab: General, Model & server, Endpoint, Privacy,
+   Extensions and About.
+2. Change theme and confirm it persists after relaunch.
+3. Change a restart-relevant server value, save, and confirm the restart
+   notice. Restart from Server console and verify health.
+4. Enter and clear dummy remote/HF secrets. Confirm the fields never redisplay
+   secret values, config JSON contains no secrets, and Windows Credential
+   Manager is the store on Windows.
+5. Configure a real OpenAI-compatible remote `/v1`. In Auto mode, stop local
+   health, wait for two failed checks, and send a message. Confirm a visible
+   CLOUD chip/banner only after remote health succeeds; repeat in Local mode
+   and confirm no silent cloud use.
+6. Check for a model update. If one is downloaded, confirm it is marked for
+   next launch and does not swap mid-conversation.
+7. Kill only the VISION-owned `llama-server` child in Task Manager during a
+   chat. Confirm health state, at most one automatic restart/banner according
+   to policy, no history loss and no dead UI. Never kill a foreign process on
+   port 8080.
+
+## 10. Extensions
+
+1. Import the same harmless sample skill four ways in clean data roots:
+   folder, lone `SKILL.md`, `.zip`, and ZIP-based `.skill`. Confirm import
+   executes no script; enable it, save Settings, and activate it with
+   `/skill-name`.
+2. Configure one harmless local stdio MCP server and, if available, one
+   Streamable HTTP MCP server. Use the legacy `--qt` surface or the documented
+   JSON config for record editing, then return to the web Settings →
+   Extensions.
+3. Click **Discover / trust**. Review every tool name/schema and fingerprint;
+   deny first and confirm no dynamic tools appear. Discover again, trust,
+   refresh, deny one tool call, then allow one harmless call.
+4. Change a tool description/schema upstream and refresh. Confirm the old
+   fingerprint is not silently accepted and re-approval is required.
+5. Test a malicious local MCP description/result that asks for clipboard or
+   token access. Any action without explicit user consent is a release
+   blocker.
+
+## 11. Feedback and audit
+
+1. Trigger thumbs-down, `/fix`, `/teach`, a schema error and a Python error.
+2. Open **Activity & feedback**. Inspect audit rows and the Feedback queue.
+3. Open `%LOCALAPPDATA%\VISION\telemetry\needs.jsonl` (or `.smoke-data` when
+   `VISION_HOME` is set). Confirm every row has exactly
+   `{ts, category, prompt, model_output, signal, detail}` and no secrets,
+   file contents or clipboard contents.
+4. Export as `feedback.jsonl` through the native save dialog.
+5. Only with a disposable/write-authorized test token and explicit opt-in,
+   upload. Confirm remote append-merge and local clear after success. Repeat
+   with an invalid token and confirm local rows remain.
+
+## 12. Reduced motion, scaling and keyboard
+
+1. Enable Windows reduced-motion/animation-off settings or the browser's
+   reduced-motion emulation in debug tooling. Confirm content is readable and
+   no essential state depends on animation.
+2. Test 100%, 125% and 150% display scaling; resize from minimum size to full
+   screen. Confirm no clipped composer controls, titlebar buttons or sheets.
+3. Navigate with Tab/Shift+Tab only. Confirm focus is always visible and the
+   composer, sidebar, tool cards, sheets and confirmation buttons are
+   reachable. Esc closes the top sheet/palette/inspector before it stops a
+   stream.
+
+## 13. Packaged build
+
+```powershell
+.\scripts\build.ps1
+Test-Path dist\VISION\VISION.exe
+Test-Path dist\VISION\_internal\app\web\index.html
+```
+
+If the second path differs, locate it with:
+
+```powershell
+Get-ChildItem dist\VISION -Recurse -Filter index.html |
+  Where-Object { $_.FullName -match 'app\\web' }
+```
+
+Then:
+
+1. move/rename the source checkout or launch from a different directory;
+2. launch `dist\VISION\VISION.exe`;
+3. repeat sections 4–6 core checks;
+4. verify About shows version/build and `VISION — built by SPIRIT ORG`;
+5. launch the packaged EXE with `--qt` once to confirm rollback still opens;
+6. test the browser profile under `%LOCALAPPDATA%\VISION\webview` persists
+   theme/window-independent web storage without writing secrets there.
+
+Do not replace the source-launch result with the packaged result or vice
+versa; record both.
+
+## 14. Minimum pass gate
+
+Do not call the Windows build release-ready unless all are true:
+
+- section 2 exits cleanly;
+- first run downloads/verifies model and supported llama.cpp;
+- `--flash-attn on` server reaches Healthy;
+- structured `get_weather` tool call passes with no raw tool syntax leak;
+- offline relaunch and module/CDN checks pass;
+- all five widgets render and export PNG/CSV;
+- safety confirmations/blocks pass;
+- packaged EXE launches outside the repo with bundled `app\web`;
+- no crash, secret leak, unconsented extension action or history loss occurs.

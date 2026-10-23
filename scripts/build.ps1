@@ -36,6 +36,8 @@ try {
         --version-file assets\version_info.txt `
         --paths src `
         --collect-submodules vision_app `
+        --collect-submodules webview `
+        --add-data "app\web;app/web" `
         run_vision.py
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 }
@@ -46,6 +48,14 @@ finally {
 $DistDir = Join-Path $Root "dist\VISION"
 $Exe = Join-Path $DistDir "VISION.exe"
 if (-not (Test-Path $Exe)) { throw "Expected executable was not produced: $Exe" }
+
+$WebIndexCandidates = @(
+    (Join-Path $DistDir "_internal\app\web\index.html"),
+    (Join-Path $DistDir "app\web\index.html")
+)
+if (-not ($WebIndexCandidates | Where-Object { Test-Path $_ })) {
+    throw "Expected web frontend was not bundled under dist\VISION (app\web\index.html missing)"
+}
 
 $BundledLlama = Join-Path $Root "third_party\llama.cpp"
 if (Test-Path (Join-Path $BundledLlama "llama-server.exe")) {
