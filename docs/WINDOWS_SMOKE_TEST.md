@@ -22,9 +22,10 @@ undocumented workaround — file it as a defect.
    Confirm the SSE arrives as structured `get_weather` tool call, a tool card
    shows args/result, and the follow-up answer streams. If raw ChatML/XML tool
    text appears as content, stop and record the exact stream — do not ship.
-7. Start with the exact frozen server arguments. If `llama-server` rejects a
-   value-less `--flash-attn`, capture stderr and stop for an approved command
-   amendment.
+7. Start with the approved server arguments, including `--flash-attn on`.
+   Confirm the argument parses and the server reaches healthy. If a future
+   llama.cpp build rejects it, capture stderr and stop for a new approved
+   command amendment.
 
 ## Definition-of-done scenarios
 

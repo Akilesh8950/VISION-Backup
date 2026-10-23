@@ -28,6 +28,7 @@ def build_server_command(binary: str | Path, model_path: str | Path, config: App
         str(config.gpu_layers),
         "--jinja",
         "--flash-attn",
+        "on",
     ]
 
 

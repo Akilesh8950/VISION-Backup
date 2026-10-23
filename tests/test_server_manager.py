@@ -12,7 +12,7 @@ def test_frozen_command_shape():
     config = AppConfig(local_port=8080, context_size=16384, gpu_layers=99)
     assert build_server_command("llama-server.exe", "model.gguf", config) == [
         "llama-server.exe", "-m", "model.gguf", "--host", "127.0.0.1", "--port", "8080",
-        "-c", "16384", "-ngl", "99", "--jinja", "--flash-attn",
+        "-c", "16384", "-ngl", "99", "--jinja", "--flash-attn", "on",
     ]
 
 

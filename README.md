@@ -16,7 +16,7 @@ remote-MCP connectors.
 - Local launch shape:
 
   ```text
-  llama-server -m <gguf> --host 127.0.0.1 --port 8080 -c 16384 -ngl 99 --jinja --flash-attn
+  llama-server -m <gguf> --host 127.0.0.1 --port 8080 -c 16384 -ngl 99 --jinja --flash-attn on
   ```
 
 - Transport: `POST /v1/chat/completions` with `stream: true`, plus
@@ -226,9 +226,11 @@ tool-call stream.
 - For CUDA builds, make sure the llama.cpp build and matching CUDA runtime
   files came from the same release. Vulkan is the smaller vendor-neutral
   fallback; CPU works but will be slower.
-- If the exact frozen `--flash-attn` invocation is rejected by a future
-  llama.cpp build, do not silently change it in a support session; capture the
-  stderr and use a supported pinned release until the command is amended.
+- VISION uses `--flash-attn on`; the pinned b11819 binary rejects the older
+  value-less form with “expected value for argument.” If a future llama.cpp
+  build rejects the valued form, do not silently change it in a support
+  session; capture the stderr and use a supported pinned release until the
+  command is amended.
 
 ### Port 8080 is already in use
 
