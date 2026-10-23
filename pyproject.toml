@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vision-desktop"
+version = "0.1.0"
+description = "VISION desktop chat client and tool runtime"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+authors = [{name = "SPIRIT ORG"}]
+dependencies = [
+  "PySide6>=6.7",
+  "httpx>=0.28",
+  "pydantic>=2",
+  "psutil",
+  "pyperclip",
+  "ddgs",
+  "huggingface_hub",
+  "mcp",
+  "PyYAML",
+  "jsonschema",
+  "pypdf",
+  "python-docx",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
