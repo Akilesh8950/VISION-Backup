@@ -4,10 +4,11 @@ import asyncio
 from dataclasses import dataclass
 
 from ..transport.client import ChatClient
+from ..transport.endpoints import Endpoint
 
 
 async def check_health(client: ChatClient, base_url: str) -> bool:
-    return await client.health(base_url)
+    return await client.health(Endpoint("local", base_url))
 
 
 async def wait_until_healthy(

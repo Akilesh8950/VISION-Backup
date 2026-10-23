@@ -44,8 +44,7 @@ class ChatClient:
                 models.append(str(item["id"]))
         return models
 
-    async def health(self, base_url: str) -> bool:
-        endpoint = Endpoint("local", base_url)
+    async def health(self, endpoint: Endpoint) -> bool:
         try:
             await self.list_models(endpoint)
             return True

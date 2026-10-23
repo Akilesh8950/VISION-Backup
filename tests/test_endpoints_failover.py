@@ -1,15 +1,15 @@
 import asyncio
 
 from vision_app.config import AppConfig, EndpointMode
-from vision_app.transport.endpoints import EndpointResolver
+from vision_app.transport.endpoints import Endpoint, EndpointResolver
 
 
 def test_auto_failover_after_two_local_failures():
     config = AppConfig(endpoint_mode=EndpointMode.AUTO, remote_base_url="https://remote.example/v1")
     resolver = EndpointResolver(config)
 
-    async def health(url: str) -> bool:
-        return "remote" in url
+    async def health(endpoint: Endpoint) -> bool:
+        return endpoint.kind == "cloud"
 
     first = asyncio.run(resolver.select(health))
     second = asyncio.run(resolver.select(health))
@@ -23,8 +23,8 @@ def test_cloud_mode_skips_local():
     resolver = EndpointResolver(config)
     seen = []
 
-    async def health(url: str) -> bool:
-        seen.append(url)
+    async def health(endpoint: Endpoint) -> bool:
+        seen.append(endpoint.base_url)
         return True
 
     selection = asyncio.run(resolver.select(health))

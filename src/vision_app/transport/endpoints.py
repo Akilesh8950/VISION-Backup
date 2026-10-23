@@ -5,8 +5,6 @@ from dataclasses import dataclass
 
 from ..config import AppConfig, EndpointMode
 
-HealthCheck = Callable[[str], Awaitable[bool]]
-
 
 @dataclass(frozen=True)
 class Endpoint:
@@ -18,6 +16,9 @@ class Endpoint:
     @property
     def label(self) -> str:
         return "LOCAL" if self.kind == "local" else "CLOUD"
+
+
+HealthCheck = Callable[[Endpoint], Awaitable[bool]]
 
 
 @dataclass
@@ -52,12 +53,12 @@ class EndpointResolver:
         mode = EndpointMode(self.config.endpoint_mode)
         if mode == EndpointMode.CLOUD:
             cloud = self.cloud_endpoint()
-            if cloud and await health_check(cloud.base_url):
+            if cloud and await health_check(cloud):
                 return EndpointSelection(cloud, self.local_failures)
             return EndpointSelection(None, self.local_failures, error="Remote endpoint is unavailable or not configured")
 
         local = self.local_endpoint()
-        if await health_check(local.base_url):
+        if await health_check(local):
             self.local_failures = 0
             return EndpointSelection(local, 0)
 
@@ -67,7 +68,7 @@ class EndpointResolver:
             mode == EndpointMode.AUTO
             and self.local_failures >= 2
             and cloud
-            and await health_check(cloud.base_url)
+            and await health_check(cloud)
         ):
             return EndpointSelection(
                 cloud, self.local_failures, failover_offered=True, failed_over=True
