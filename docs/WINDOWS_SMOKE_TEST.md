@@ -7,7 +7,8 @@ undocumented workaround — file it as a defect.
 
 ## Install and first run
 
-1. Clone, create a Python 3.11 venv, `pip install -r requirements.txt`.
+1. Clone, create a Python 3.11 venv, run `pip install -r requirements.txt`,
+   then `pip install -e . --no-deps`.
 2. Run `python -m vision_app`; the first-run wizard appears.
 3. Download `llama-server`; confirm its detected build is `>= b11815`.
 4. Download the GGUF; confirm 5,629,108,640 bytes and at least 7 GB free-space

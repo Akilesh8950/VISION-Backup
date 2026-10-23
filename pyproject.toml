@@ -14,6 +14,7 @@ dependencies = [
   "httpx>=0.28",
   "pydantic>=2",
   "psutil",
+  "pywin32>=312; sys_platform == \"win32\"",
   "pyperclip",
   "ddgs",
   "huggingface_hub",
