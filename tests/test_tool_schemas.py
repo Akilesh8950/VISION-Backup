@@ -93,3 +93,12 @@ def test_yahoo_stock_parser():
     result = parse_yahoo_chart(payload, "AAPL")
     assert result["price"] == 347.5
     assert result["source"].startswith("Yahoo Finance")
+
+
+def test_tool_schemas_reject_unknown_fields():
+    import pytest
+    from pydantic import ValidationError
+
+    from vision_app.tools import schemas
+    with pytest.raises(ValidationError):
+        schemas.GetWeatherArgs(city="Coimbatore", surprise=True)

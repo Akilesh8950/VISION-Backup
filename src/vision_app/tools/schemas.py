@@ -2,19 +2,23 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class EmptyArgs(BaseModel):
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmptyArgs(StrictModel):
     pass
 
 
-class WebSearchArgs(BaseModel):
+class WebSearchArgs(StrictModel):
     query: str = Field(min_length=1, max_length=500)
     max_results: int = Field(default=5, ge=1, le=10)
 
 
-class GetNewsArgs(BaseModel):
+class GetNewsArgs(StrictModel):
     topic: str = Field(min_length=1, max_length=300)
     limit: int = Field(default=5, ge=1, le=20)
 
@@ -23,52 +27,52 @@ class WeatherUnits(str):
     pass
 
 
-class GetWeatherArgs(BaseModel):
+class GetWeatherArgs(StrictModel):
     city: str = Field(min_length=1, max_length=200)
     units: Literal["metric", "imperial"] = "metric"
 
 
-class GetStockPriceArgs(BaseModel):
+class GetStockPriceArgs(StrictModel):
     ticker: str = Field(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.^=\-]+$")
 
 
-class GetCryptoPriceArgs(BaseModel):
+class GetCryptoPriceArgs(StrictModel):
     symbol: str = Field(min_length=1, max_length=30)
     currency: str = Field(default="USD", min_length=3, max_length=5, pattern=r"^[A-Za-z]+$")
 
 
-class LookupDocsArgs(BaseModel):
+class LookupDocsArgs(StrictModel):
     library: str = Field(min_length=1, max_length=200)
     topic: str = Field(min_length=1, max_length=500)
 
 
-class RunPythonArgs(BaseModel):
+class RunPythonArgs(StrictModel):
     code: str = Field(min_length=1, max_length=20_000)
 
 
-class ReadFileArgs(BaseModel):
+class ReadFileArgs(StrictModel):
     path: str = Field(min_length=1, max_length=1000)
 
 
-class WriteFileArgs(BaseModel):
+class WriteFileArgs(StrictModel):
     path: str = Field(min_length=1, max_length=1000)
     content: str = Field(max_length=1_000_000)
 
 
-class ListFilesArgs(BaseModel):
+class ListFilesArgs(StrictModel):
     directory: str = Field(min_length=1, max_length=1000)
 
 
-class SearchCodeArgs(BaseModel):
+class SearchCodeArgs(StrictModel):
     pattern: str = Field(min_length=1, max_length=500)
     path: str = Field(min_length=1, max_length=1000)
 
 
-class MemoryGetArgs(BaseModel):
+class MemoryGetArgs(StrictModel):
     key: str = Field(min_length=1, max_length=200)
 
 
-class MemorySetArgs(BaseModel):
+class MemorySetArgs(StrictModel):
     key: str = Field(min_length=1, max_length=200)
     value: str = Field(max_length=10_000)
 
@@ -76,7 +80,7 @@ class MemorySetArgs(BaseModel):
 Cell = str | int | float | bool | None
 
 
-class UiTableArgs(BaseModel):
+class UiTableArgs(StrictModel):
     title: str = Field(min_length=1, max_length=300)
     columns: list[str] = Field(min_length=1, max_length=12)
     rows: list[list[Cell]] = Field(max_length=200)
@@ -89,7 +93,7 @@ class UiTableArgs(BaseModel):
         return self
 
 
-class UiChartArgs(BaseModel):
+class UiChartArgs(StrictModel):
     title: str = Field(min_length=1, max_length=300)
     chart_type: Literal["bar", "line", "pie", "scatter"]
     labels: list[str] = Field(min_length=1, max_length=200)
@@ -104,48 +108,48 @@ class UiChartArgs(BaseModel):
         return self
 
 
-class UiCard(BaseModel):
+class UiCard(StrictModel):
     title: str = Field(min_length=1, max_length=200)
     value: str | None = Field(default=None, max_length=500)
     body: str | None = Field(default=None, max_length=2000)
     footer: str | None = Field(default=None, max_length=500)
 
 
-class UiCardsArgs(BaseModel):
+class UiCardsArgs(StrictModel):
     title: str = Field(min_length=1, max_length=300)
     cards: list[UiCard] = Field(min_length=1, max_length=12)
 
 
-class UiTimelineEvent(BaseModel):
+class UiTimelineEvent(StrictModel):
     time: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=300)
     description: str | None = Field(default=None, max_length=2000)
 
 
-class UiTimelineArgs(BaseModel):
+class UiTimelineArgs(StrictModel):
     title: str = Field(min_length=1, max_length=300)
     events: list[UiTimelineEvent] = Field(min_length=1, max_length=50)
 
 
-class UiCodeDiffArgs(BaseModel):
+class UiCodeDiffArgs(StrictModel):
     filename: str = Field(min_length=1, max_length=500)
     before: str = Field(max_length=200_000)
     after: str = Field(max_length=200_000)
 
 
-class OpenAppArgs(BaseModel):
+class OpenAppArgs(StrictModel):
     app_name: str = Field(min_length=1, max_length=200)
 
 
-class FocusWindowArgs(BaseModel):
+class FocusWindowArgs(StrictModel):
     title_substring: str = Field(min_length=1, max_length=300)
 
 
-class OpenPathArgs(BaseModel):
+class OpenPathArgs(StrictModel):
     path: str = Field(min_length=1, max_length=1000)
 
 
-class OpenUrlArgs(BaseModel):
+class OpenUrlArgs(StrictModel):
     url: str = Field(min_length=8, max_length=4000)
 
     @field_validator("url")
@@ -156,16 +160,16 @@ class OpenUrlArgs(BaseModel):
         return value
 
 
-class ClipboardSetArgs(BaseModel):
+class ClipboardSetArgs(StrictModel):
     text: str = Field(max_length=100_000)
 
 
-class SetTimerArgs(BaseModel):
+class SetTimerArgs(StrictModel):
     minutes: float = Field(gt=0, le=1440)
     label: str = Field(min_length=1, max_length=300)
 
 
-class ReadUrlArgs(BaseModel):
+class ReadUrlArgs(StrictModel):
     url: str = Field(min_length=8, max_length=4000)
     max_chars: int = Field(default=12_000, ge=500, le=50_000)
 
@@ -177,7 +181,7 @@ class ReadUrlArgs(BaseModel):
         return value
 
 
-class SkillLoadArgs(BaseModel):
+class SkillLoadArgs(StrictModel):
     name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
