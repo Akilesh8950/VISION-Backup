@@ -7,8 +7,16 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat, QTextDocument
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar,
-    QPushButton, QTextBrowser, QToolButton, QVBoxLayout, QWidget,
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QProgressBar,
+    QTextBrowser,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..genui.factory import build_genui_widget
@@ -99,7 +107,7 @@ class MessageWidget(QWidget):
             widget = item.widget()
             if widget:
                 widget.deleteLater()
-        parts = re.split(r"```(\w*)\n(.*?)```", self.content_text, flags=re.S)
+        parts = re.split(r"```(\w*)\n(.*?)```", self.content_text, flags=re.DOTALL)
         if len(parts) == 1:
             self.body_layout.addWidget(_markdown_browser(self.content_text))
             return

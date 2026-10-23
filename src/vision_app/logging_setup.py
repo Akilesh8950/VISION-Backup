@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -36,7 +36,7 @@ class AuditLog:
 
     def write(self, name: str, args: Any, status: str, duration_ms: float, **extra: Any) -> None:
         record = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "name": name,
             "args": redact_value(args),
             "status": status,

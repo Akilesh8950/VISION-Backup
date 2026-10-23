@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 from enum import Enum
-from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -65,11 +64,11 @@ class AppConfig(BaseModel):
         return value
 
     @classmethod
-    def defaults(cls, paths: AppPaths) -> "AppConfig":
+    def defaults(cls, paths: AppPaths) -> AppConfig:
         return cls(model_path=str(paths.model_file))
 
     @classmethod
-    def load(cls, paths: AppPaths) -> "AppConfig":
+    def load(cls, paths: AppPaths) -> AppConfig:
         if not paths.config_file.exists():
             config = cls.defaults(paths)
             config.save(paths)

@@ -37,7 +37,7 @@ def test_import_folder_and_zip_and_skill_alias(tmp_path):
 
     skill_file = tmp_path / "demo.skill"
     skill_file.write_bytes(archive.read_bytes())
-    installed3 = import_skill(skill_file, tmp_path / "skills3")
+    assert import_skill(skill_file, tmp_path / "skills3").name == "demo-skill"
     assert SkillManager(tmp_path / "skills3").get("demo-skill").files
 
 

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html.parser import HTMLParser
+from typing import ClassVar
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -14,7 +15,7 @@ MAX_RESPONSE_BYTES = 2_000_000
 
 
 class _TextExtractor(HTMLParser):
-    SKIP = {"script", "style", "noscript", "svg", "canvas", "iframe"}
+    SKIP: ClassVar[set[str]] = {"script", "style", "noscript", "svg", "canvas", "iframe"}
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -130,5 +131,5 @@ def read_url(args: schemas.ReadUrlArgs) -> dict:
         "title": title,
         "text": text[:args.max_chars],
         "truncated": truncated,
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": datetime.now(UTC).isoformat(),
     }

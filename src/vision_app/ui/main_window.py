@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -10,13 +9,28 @@ from types import SimpleNamespace
 from typing import Any
 
 import psutil
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDockWidget, QFileDialog, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-    QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTabWidget,
-    QVBoxLayout, QWidget,
+    QComboBox,
+    QDialog,
+    QDockWidget,
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .. import BUILD_COMMIT, __version__
@@ -477,9 +491,6 @@ class MainWindow(QMainWindow):
             if not regenerate:
                 widget = self.transcript.add_message("user", prepared["text"] if len(prepared["text"]) < 5000 else text + "\n\n[Attachment content included in request]")
                 self._connect_message(widget)
-                rows = self.history.list_conversations(include_archived=True)
-                row = next((item for item in rows if item["id"] == conversation_id), None)
-                # User message is persisted by controller; title after turn from history.
             self.transcript.start_assistant(); self._connect_message(self.transcript.current_assistant)
             self._current_sources = list(prepared["sources"]); self.sources_panel.set_sources(self._current_sources)
             tools = self.registry.openai_tools(include_skill_load=bool(skills_enabled), dynamic_names=dynamic_names)
@@ -812,7 +823,7 @@ class MainWindow(QMainWindow):
         )
         wizard.exec(); self._maybe_start_server()
 
-    def closeEvent(self, event) -> None:  # noqa: N802 Qt naming
+    def closeEvent(self, event) -> None:
         try:
             self.needs_log.flush()
             if self.config.telemetry_opt_in:

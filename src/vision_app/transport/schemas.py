@@ -46,7 +46,7 @@ class ToolCallAccumulator(BaseModel):
             self.id = str(delta["id"])
         function = delta.get("function") or {}
         if function.get("name"):
-            self.name += str(function["name"]) if self.name else str(function["name"])
+            self.name += str(function["name"])
         if function.get("arguments"):
             self.arguments += str(function["arguments"])
 

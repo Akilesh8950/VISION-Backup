@@ -22,7 +22,7 @@ class McpToolDescriptor:
     annotations: dict[str, Any] | None = None
 
     @classmethod
-    def from_any(cls, item: Any) -> "McpToolDescriptor":
+    def from_any(cls, item: Any) -> McpToolDescriptor:
         if isinstance(item, dict):
             return cls(
                 name=str(item.get("name") or ""),
@@ -92,7 +92,7 @@ def make_mcp_tool_definition(
         result = await call_tool(config.id, descriptor.name, args)
         is_error = False
         if hasattr(result, "isError"):
-            is_error = bool(getattr(result, "isError"))
+            is_error = bool(result.isError)
         elif isinstance(result, dict):
             is_error = bool(result.get("isError") or result.get("is_error"))
         normalised = _normalise_result(result)

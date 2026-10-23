@@ -7,12 +7,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication
 
-from vision_app.app import build_services  # noqa: E402
-from vision_app.genui.factory import build_genui_widget  # noqa: E402
-from vision_app.paths import AppPaths  # noqa: E402
-from vision_app.ui.main_window import MainWindow  # noqa: E402
+from vision_app.app import build_services
+from vision_app.genui.factory import build_genui_widget
+from vision_app.paths import AppPaths
+from vision_app.ui.main_window import MainWindow
 
 
 @pytest.fixture(scope="module")

@@ -4,7 +4,7 @@ import hashlib
 import json
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -29,7 +29,7 @@ class CheckpointManager:
             "original_path": str(path.resolve()),
             "existed": existed,
             "sha256": digest,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         (directory / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         return checkpoint_id

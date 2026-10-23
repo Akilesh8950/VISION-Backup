@@ -6,15 +6,35 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPlainTextEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..config import AppConfig
 from ..credentials import CredentialStore
-from ..extensions.connectors import ConnectorConfig, load_connectors, save_connectors, ConnectorConfigFile
-from ..extensions.mcp_config import McpServerConfig, export_mcp_servers, import_mcp_servers, load_mcp_config, save_mcp_config
+from ..extensions.connectors import ConnectorConfig, load_connectors, save_connectors
+from ..extensions.mcp_config import (
+    McpServerConfig,
+    export_mcp_servers,
+    import_mcp_servers,
+    load_mcp_config,
+    save_mcp_config,
+)
 from ..extensions.skill_import import export_skill, import_skill
 from ..extensions.skills import SkillManager
 from ..paths import AppPaths
@@ -90,7 +110,7 @@ class ExtensionsCenterDialog(QDialog):
         if not name: return
         try:
             package = self.skill_manager.get(name)
-            self.skill_details.setPlainText(f"Files:\n" + "\n".join(package.files) + "\n\nInstructions:\n" + package.body[:12000])
+            self.skill_details.setPlainText("Files:\n" + "\n".join(package.files) + "\n\nInstructions:\n" + package.body[:12000])
         except Exception as exc:
             self.skill_details.setPlainText(str(exc))
 

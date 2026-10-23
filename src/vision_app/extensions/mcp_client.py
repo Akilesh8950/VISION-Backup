@@ -73,7 +73,7 @@ class McpClientManager:
         elif config.transport == "streamable_http":
             from mcp.client import streamable_http as module  # type: ignore
 
-            factory = getattr(module, "streamable_http_client", None) or getattr(module, "streamablehttp_client")
+            factory = getattr(module, "streamable_http_client", None) or module.streamablehttp_client
             headers = self._resolve_refs(config.header_refs, config.headers_plain)
             parameters = inspect.signature(factory).parameters
             if "headers" in parameters:

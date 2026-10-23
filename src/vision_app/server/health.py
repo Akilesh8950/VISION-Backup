@@ -4,7 +4,6 @@ import asyncio
 from dataclasses import dataclass
 
 from ..transport.client import ChatClient
-from ..transport.endpoints import Endpoint
 
 
 async def check_health(client: ChatClient, base_url: str) -> bool:

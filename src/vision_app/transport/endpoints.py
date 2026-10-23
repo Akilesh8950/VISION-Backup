@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable
 
 from ..config import AppConfig, EndpointMode
 
@@ -63,11 +63,15 @@ class EndpointResolver:
 
         self.local_failures += 1
         cloud = self.cloud_endpoint()
-        if mode == EndpointMode.AUTO and self.local_failures >= 2 and cloud:
-            if await health_check(cloud.base_url):
-                return EndpointSelection(
-                    cloud, self.local_failures, failover_offered=True, failed_over=True
-                )
+        if (
+            mode == EndpointMode.AUTO
+            and self.local_failures >= 2
+            and cloud
+            and await health_check(cloud.base_url)
+        ):
+            return EndpointSelection(
+                cloud, self.local_failures, failover_offered=True, failed_over=True
+            )
         return EndpointSelection(
             None,
             self.local_failures,

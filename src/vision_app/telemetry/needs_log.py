@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ class NeedsLog:
         if signal not in SIGNALS:
             raise ValueError(f"Unsupported telemetry signal: {signal}")
         record = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "category": redact_text(str(category)),
             "prompt": redact_text(str(prompt)),
             "model_output": redact_text(str(model_output)),

@@ -1,9 +1,10 @@
+import sys
+
 from vision_app.code_workspace.checkpoints import CheckpointManager
 from vision_app.code_workspace.test_profiles import run_test_profile
 from vision_app.knowledge.index import KnowledgeIndex
 from vision_app.knowledge.retrieval import build_project_context
 from vision_app.projects import ProjectStore
-import sys
 
 
 def test_project_knowledge_and_citations(tmp_path):

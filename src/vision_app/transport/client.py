@@ -104,7 +104,7 @@ class ChatClient:
                         line = await asyncio.wait_for(iterator.__anext__(), timeout=wait)
                     except StopAsyncIteration:
                         break
-                    except asyncio.TimeoutError as exc:
+                    except TimeoutError as exc:
                         if not first_event_seen:
                             raise ChatClientError("Timed out waiting for the first token") from exc
                         raise ChatClientError("Response exceeded the total timeout") from exc

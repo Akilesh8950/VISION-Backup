@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -56,9 +55,7 @@ class PathSandbox:
             return True
         if action == "open" and resolved.suffix.lower() in EXECUTABLE_SUFFIXES:
             return True
-        if action == "read" and not self.is_read_allowed_root(resolved):
-            return True
-        return False
+        return action == "read" and not self.is_read_allowed_root(resolved)
 
     def validate_write(self, resolved: Path) -> None:
         if is_system_path(resolved):

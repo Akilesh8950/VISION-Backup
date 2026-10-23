@@ -6,4 +6,4 @@ try:
 except Exception:  # pragma: no cover - generated only during packaging
     BUILD_COMMIT = "dev"
 
-__all__ = ["__version__", "BUILD_COMMIT"]
+__all__ = ["BUILD_COMMIT", "__version__"]

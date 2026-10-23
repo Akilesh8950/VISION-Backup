@@ -1,4 +1,10 @@
-from vision_app.extensions.connectors import ConnectorConfig, connector_as_server, load_connectors, save_connectors, ConnectorConfigFile
+from vision_app.extensions.connectors import (
+    ConnectorConfig,
+    ConnectorConfigFile,
+    connector_as_server,
+    load_connectors,
+    save_connectors,
+)
 
 
 def test_connector_round_trip_and_server_conversion(tmp_path):

@@ -82,7 +82,7 @@ class UiTableArgs(BaseModel):
     rows: list[list[Cell]] = Field(max_length=200)
 
     @model_validator(mode="after")
-    def _row_widths(self) -> "UiTableArgs":
+    def _row_widths(self) -> UiTableArgs:
         for index, row in enumerate(self.rows):
             if len(row) != len(self.columns):
                 raise ValueError(f"row {index} has {len(row)} values; expected {len(self.columns)}")
@@ -96,7 +96,7 @@ class UiChartArgs(BaseModel):
     values: list[float] = Field(min_length=1, max_length=200)
 
     @model_validator(mode="after")
-    def _length_and_ranges(self) -> "UiChartArgs":
+    def _length_and_ranges(self) -> UiChartArgs:
         if len(self.labels) != len(self.values):
             raise ValueError("labels and values must have the same length")
         if self.chart_type == "pie" and any(value < 0 for value in self.values):

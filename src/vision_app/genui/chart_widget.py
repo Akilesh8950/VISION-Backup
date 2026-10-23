@@ -6,8 +6,15 @@ from PySide6.QtWidgets import QFileDialog, QFrame, QHBoxLayout, QLabel, QPushBut
 
 try:
     from PySide6.QtCharts import (
-        QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries,
-        QPieSeries, QScatterSeries, QValueAxis,
+        QBarCategoryAxis,
+        QBarSeries,
+        QBarSet,
+        QChart,
+        QChartView,
+        QLineSeries,
+        QPieSeries,
+        QScatterSeries,
+        QValueAxis,
     )
     HAS_QTCHARTS = True
 except Exception:  # pragma: no cover

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from urllib.parse import quote
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -150,7 +150,7 @@ def parse_yahoo_chart(payload: dict[str, Any], ticker: str) -> dict[str, Any]:
         "low": meta.get("regularMarketDayLow") or last_number("low"),
         "close": meta.get("regularMarketPrice") or last_number("close"),
         "volume": meta.get("regularMarketVolume") or last_number("volume"),
-        "observed_at": datetime.fromtimestamp(float(timestamp), timezone.utc).isoformat() if timestamp else None,
+        "observed_at": datetime.fromtimestamp(float(timestamp), UTC).isoformat() if timestamp else None,
         "source": "Yahoo Finance chart API",
     }
 

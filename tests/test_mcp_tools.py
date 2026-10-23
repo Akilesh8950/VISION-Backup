@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import ClassVar
 
 from vision_app.extensions.mcp_client import McpClientManager
 from vision_app.extensions.mcp_config import McpServerConfig
@@ -14,7 +15,7 @@ from vision_app.transport.schemas import FunctionCall, ToolCall
 
 
 class Result:
-    tools = [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]
+    tools: ClassVar[list[dict]] = [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]
 
 
 class FakeSession:
