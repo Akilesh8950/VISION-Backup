@@ -10,7 +10,12 @@ from pathlib import Path
 from ..constants import MIN_LLAMA_BUILD
 from ..paths import AppPaths
 
-BUILD_RE = re.compile(r"\bb(\d{4,6})\b")
+BUILD_RES = (
+    re.compile(r"\bbuild\s+(\d{4,6})\b", re.IGNORECASE),
+    re.compile(r"\bb(\d{4,6})\b", re.IGNORECASE),
+    re.compile(r"\bversion\s*[:=]\s*(\d{4,6})\b", re.IGNORECASE),
+)
+_BUILD_CACHE: dict[tuple[str, int, int], int | None] = {}
 
 
 def _exe_name() -> str:
@@ -42,31 +47,55 @@ def candidate_paths(paths: AppPaths, configured_path: str = "") -> list[Path]:
     return result
 
 
-def find_llama_server(paths: AppPaths, configured_path: str = "") -> Path | None:
+def find_llama_server(
+    paths: AppPaths,
+    configured_path: str = "",
+    *,
+    require_supported: bool = False,
+) -> Path | None:
     for candidate in candidate_paths(paths, configured_path):
-        if candidate.is_file():
-            return candidate
+        if not candidate.is_file():
+            continue
+        if require_supported and not build_is_supported(detect_build(candidate)):
+            continue
+        return candidate
     return None
 
 
 def parse_build_number(text: str) -> int | None:
-    match = BUILD_RE.search(text)
-    return int(match.group(1)) if match else None
+    for pattern in BUILD_RES:
+        match = pattern.search(text)
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def detect_build(binary: Path, timeout: float = 5.0) -> int | None:
     from_path = parse_build_number(str(binary))
     try:
+        stat = binary.stat()
+        cache_key = (os.path.normcase(str(binary.resolve())), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return from_path
+    if cache_key in _BUILD_CACHE:
+        return _BUILD_CACHE[cache_key]
+
+    detected = from_path
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
         completed = subprocess.run(
             [str(binary), "--version"],
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
+            creationflags=creationflags,
         )
-        return parse_build_number((completed.stdout or "") + (completed.stderr or "")) or from_path
+        detected = parse_build_number((completed.stdout or "") + "\n" + (completed.stderr or "")) or from_path
     except Exception:
-        return from_path
+        detected = from_path
+    _BUILD_CACHE[cache_key] = detected
+    return detected
 
 
 def build_is_supported(build: int | None) -> bool:

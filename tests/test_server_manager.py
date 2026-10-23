@@ -2,7 +2,9 @@ import sys
 import time
 
 from vision_app.config import AppConfig
-from vision_app.server.discovery import parse_build_number
+from vision_app.paths import AppPaths
+from vision_app.server import discovery
+from vision_app.server.discovery import find_llama_server, parse_build_number
 from vision_app.server.download_llama import asset_names, detect_variant
 from vision_app.server.health import HealthState
 from vision_app.server.manager import LlamaServerManager, build_server_command
@@ -18,9 +20,29 @@ def test_frozen_command_shape():
 
 def test_build_and_asset_selection():
     assert parse_build_number("llama b11819") == 11819
+    assert parse_build_number("version: 0.7.0-dev (build 11819, commit 0693dbfb9)") == 11819
+    assert parse_build_number("version: 11819") == 11819
     assert detect_variant(has_nvidia=True, machine="AMD64") == "cuda-12.4-x64"
     assert detect_variant(has_nvidia=False, machine="AMD64") == "vulkan-x64"
     assert len(asset_names("cuda-12.4-x64")) == 2
+
+
+def test_find_llama_server_can_skip_unsupported_build(tmp_path, monkeypatch):
+    paths = AppPaths(tmp_path / "app", tmp_path / "workspace")
+    paths.ensure()
+    exe = "llama-server.exe" if sys.platform == "win32" else "llama-server"
+    unsupported = paths.bin_dir / "a" / exe
+    supported = paths.bin_dir / "b" / exe
+    unsupported.parent.mkdir()
+    supported.parent.mkdir()
+    unsupported.write_bytes(b"old")
+    supported.write_bytes(b"new")
+    monkeypatch.setattr(
+        discovery,
+        "detect_build",
+        lambda candidate: 11814 if candidate == unsupported else 11819,
+    )
+    assert find_llama_server(paths, require_supported=True) == supported
 
 
 def test_health_state_two_failure_rule():

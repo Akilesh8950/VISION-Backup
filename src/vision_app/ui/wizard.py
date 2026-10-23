@@ -7,8 +7,9 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QVBoxLayout
 
 from ..config import AppConfig
+from ..constants import MIN_LLAMA_BUILD
 from ..paths import AppPaths
-from ..server.discovery import find_llama_server
+from ..server.discovery import build_is_supported, detect_build, find_llama_server
 from .workers import FunctionWorker
 
 
@@ -50,8 +51,14 @@ class FirstRunWizard(QDialog):
 
     def _refresh_status(self) -> None:
         model = Path(self.config.model_path or self.paths.model_file)
-        server = find_llama_server(self.paths, self.config.llama_server_path)
-        self.status.setText(f"Model: {'installed' if model.exists() else 'not installed'} · llama-server: {server or 'not found'}")
+        server = find_llama_server(self.paths, self.config.llama_server_path, require_supported=True) or find_llama_server(self.paths, self.config.llama_server_path)
+        build_text = ""
+        if server:
+            build = detect_build(server)
+            detected = f"b{build}" if build else "unknown"
+            support = "supported" if build_is_supported(build) else f"unsupported; requires b{MIN_LLAMA_BUILD}+"
+            build_text = f" (build {detected}, {support})"
+        self.status.setText(f"Model: {'installed' if model.exists() else 'not installed'} · llama-server: {server or 'not found'}{build_text}")
 
     def _run(self, function, success: str) -> None:
         if self._thread and self._thread.isRunning(): return

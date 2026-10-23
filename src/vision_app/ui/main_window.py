@@ -37,14 +37,14 @@ from .. import BUILD_COMMIT, __version__
 from ..chat.worker import ChatWorker
 from ..code_workspace.git_status import git_status
 from ..code_workspace.test_profiles import run_test_profile
-from ..constants import CREDITS_LINE
+from ..constants import CREDITS_LINE, MIN_LLAMA_BUILD
 from ..extensions.connectors import connector_as_server, load_connectors, save_connectors
 from ..extensions.mcp_config import McpServerConfig, load_mcp_config, save_mcp_config
 from ..extensions.mcp_tools import make_mcp_tool_definition
 from ..genui.cards_widget import CardsWidget
 from ..genui.factory import build_genui_widget
 from ..knowledge.retrieval import build_project_context
-from ..server.discovery import find_llama_server
+from ..server.discovery import detect_build, find_llama_server
 from ..server.download_llama import download_llama
 from ..server.health import HealthState
 from ..telemetry.uploader import upload_in_background, upload_needs_log
@@ -582,17 +582,44 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(max(1, int(minutes * 60_000)), lambda: QMessageBox.information(self, "VISION timer", label))
 
     # ---------- server/health ----------
-    def _maybe_start_server(self) -> None:
-        if self.server_manager.is_running: return
+    def _maybe_start_server(self) -> bool:
+        if self.server_manager.is_running:
+            return True
         model = Path(self.config.model_path or self.paths.model_file)
-        binary = find_llama_server(self.paths, self.config.llama_server_path)
-        if not model.exists(): self.health_label.setText("Server: model missing"); self.server_console.set_state("Model missing"); return
-        if not binary: self.health_label.setText("Server: llama-server missing"); self.server_console.set_state("llama-server missing"); return
+        if not model.exists():
+            self.health_label.setText("Server: model missing")
+            self.server_console.set_state("Model missing")
+            return False
+
+        binary = find_llama_server(
+            self.paths,
+            self.config.llama_server_path,
+            require_supported=True,
+        )
+        if not binary:
+            unsupported = find_llama_server(self.paths, self.config.llama_server_path)
+            if unsupported:
+                build = detect_build(unsupported)
+                detected = f"b{build}" if build else "unknown"
+                self.health_label.setText("Server: unsupported llama.cpp build")
+                self.server_console.set_state(f"Unsupported llama.cpp build ({detected})")
+                self._show_banner(
+                    f"Found llama-server build {detected}; VISION requires b{MIN_LLAMA_BUILD} or newer. "
+                    "Use Model Manager to download the pinned supported build."
+                )
+            else:
+                self.health_label.setText("Server: llama-server missing")
+                self.server_console.set_state("llama-server missing")
+            return False
+
         try:
             self.server_manager.start(binary, model, self.config)
-            self.health_label.setText("Server: starting"); self.server_console.set_state("Starting")
+            self.health_label.setText("Server: starting")
+            self.server_console.set_state("Starting")
+            return True
         except Exception as exc:
             self._show_banner(f"Could not start llama-server: {exc}")
+            return False
 
     def _restart_server(self) -> None:
         self.server_manager.stop(); self._maybe_start_server()
@@ -806,7 +833,8 @@ class MainWindow(QMainWindow):
 
     def _show_wizard(self) -> None:
         def health() -> bool:
-            self._maybe_start_server()
+            if not self._maybe_start_server():
+                raise RuntimeError("llama-server could not be started. Open the server console for details.")
             deadline = time.time() + 120
             while time.time() < deadline:
                 if self._sync_health(self.config.local_base_url): return True
