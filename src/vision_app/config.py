@@ -38,6 +38,10 @@ class AppConfig(BaseModel):
     first_run_completed: bool = False
     max_extension_tools: int = 32
     auto_start_local_server: bool = True
+    enabled_skills: list[str] = Field(default_factory=list)
+    enabled_mcp_servers: list[str] = Field(default_factory=list)
+    enabled_connectors: list[str] = Field(default_factory=list)
+    active_project_id: str = ""
 
     @field_validator("local_port")
     @classmethod
