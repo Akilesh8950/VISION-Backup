@@ -341,6 +341,25 @@ class VisionWebApi:
             payload["logs"] = self.server_manager.logs(300)
         return payload
 
+    def _paths_payload(self, *, detailed: bool = False) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "app_data": str(self.paths.app_data),
+            "workspace": str(self.paths.workspace),
+            "installation_mode": self.paths.installation_mode,
+            "installation_root": (
+                str(self.paths.installation_root) if self.paths.installation_root else ""
+            ),
+        }
+        if detailed:
+            payload.update(
+                {
+                    "model_file": str(self.paths.model_file),
+                    "audit_log": str(self.paths.audit_log),
+                    "needs_log": str(self.paths.needs_log),
+                }
+            )
+        return payload
+
     def get_state(self) -> dict[str, Any]:
         conversations = self.history.list_conversations()
         if not conversations:
@@ -361,13 +380,7 @@ class VisionWebApi:
                 "remote_api_key_stored": bool(self.credentials.get("REMOTE_API_KEY")),
                 "hf_token_stored": bool(self.credentials.get("HF_TOKEN")),
             },
-            "paths": {
-                "app_data": str(self.paths.app_data),
-                "workspace": str(self.paths.workspace),
-                "model_file": str(self.paths.model_file),
-                "audit_log": str(self.paths.audit_log),
-                "needs_log": str(self.paths.needs_log),
-            },
+            "paths": self._paths_payload(detailed=True),
             "conversations": _json_safe(conversations),
             "current_conversation_id": conversation_id,
             "projects": _json_safe(self.projects.list_projects()),
@@ -760,10 +773,7 @@ class VisionWebApi:
                 "remote_api_key_stored": bool(self.credentials.get("REMOTE_API_KEY")),
                 "hf_token_stored": bool(self.credentials.get("HF_TOKEN")),
             },
-            "paths": {
-                "app_data": str(self.paths.app_data),
-                "workspace": str(self.paths.workspace),
-            },
+            "paths": self._paths_payload(),
             "skills": self._skills_payload(),
             "projects": _json_safe(self.projects.list_projects()),
             "extensions": self._extensions_payload(),

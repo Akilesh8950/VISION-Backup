@@ -1,0 +1,11 @@
+VISION portable mode is enabled by the presence of this file.
+
+VISION — built by SPIRIT ORG
+
+When VISION.exe runs from this folder, it stores:
+- configuration, history, logs, model, llama.cpp, skills and WebView2 profile in .\data
+- tool workspace files in .\workspace
+
+Do not delete this marker unless you want VISION to return to the standard
+Windows per-user data locations. For security, API keys and Hugging Face
+tokens are still kept in Windows Credential Manager rather than this folder.

@@ -33,10 +33,13 @@ VISION — built by SPIRIT ORG
               │ fallback (mode Auto/Cloud, after 2 failed health checks)
               └──────────────▶ remote OpenAI-compatible endpoint
                                (<remote base URL>/v1/chat/completions)
-State: %LOCALAPPDATA%\VISION\{config.json, history.sqlite3, logs\, models\,
-                              telemetry\needs.jsonl, extensions\, skills\}
+State (Standard): %LOCALAPPDATA%\VISION\{config.json, history.sqlite3, logs\,
+                              models\, bin\, webview\, telemetry\needs.jsonl,
+                              extensions\, skills\}
+State (Portable): <install folder>\data\{same layout}
 UI: docs/UI_SPEC.md · Extensions: docs/EXTENSIONS_SPEC.md · Features: docs/FEATURES_SPEC.md
-Workspace (tool file ops): %USERPROFILE%\VISION\workspace
+Workspace: %USERPROFILE%\VISION\workspace (Standard) or
+<install folder>\workspace (Portable)
 ```
 
 ## 2. Module map
@@ -44,7 +47,7 @@ Workspace (tool file ops): %USERPROFILE%\VISION\workspace
 | Module | Responsibility | Qt? | Windows-only? |
 |---|---|---|---|
 | `constants` | product/repo/file constants, credits line, min llama.cpp build | no | no |
-| `paths` | app-data layout, workspace resolution | no | no (pure `pathlib` + env) |
+| `paths` | app-data/workspace resolution: `VISION_HOME` → frozen `VISION.portable` marker (`<install>\data` + `<install>\workspace`) → standard OS locations | no | no (pure `pathlib` + env) |
 | `config` | pydantic `AppConfig`, atomic JSON persistence | no | no |
 | `credentials` | HF token / remote key via `win32cred` | no | guarded (memory fallback) |
 | `redaction` | `hf_[A-Za-z0-9]{20,}`, `HF_TOKEN`, key patterns → `***` | no | no |
@@ -205,3 +208,21 @@ Full import, transport, trust and connector rules live in
 `docs/EXTENSIONS_SPEC.md`; visible layout and consent surfaces live in
 `docs/UI_SPEC.md`; the owner-selected F2/F4/F5/F15 bundle is detailed in
 `docs/FEATURES_SPEC.md` and enters at PLAN M12–M15.
+
+## 8. Windows packaging and installation modes
+
+`scripts/build.ps1` creates the PyInstaller one-folder payload in
+`dist\VISION`. `scripts/build_installer.ps1` refuses a payload containing a
+GGUF, `data`, `workspace`, or `VISION.portable`, then compiles
+`installer\VISION.iss` with Inno Setup solid LZMA2/Ultra64 and writes a
+SHA-256 sidecar.
+
+Setup asks current-user vs all-users, then Portable vs Standard data, then the
+destination folder. Portable is available for current-user installs and writes
+`VISION.portable`, `data\`, and `workspace\` at the destination. All-users
+installs are forced to Standard mode so private per-user data is not shared
+from Program Files. The WebView2 profile remains under the active app-data
+root (`<app_data>\webview`), while secrets remain in Windows Credential
+Manager in both modes. The same wrapper can emit a portable ZIP with the
+marker and empty `data\`/`workspace\` directories. User/owner steps live in
+`docs/INSTALLATION.md`.

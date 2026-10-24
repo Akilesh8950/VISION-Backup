@@ -52,6 +52,9 @@ def test_bridge_state_settings_and_secret_redaction(tmp_path):
     assert state["current_conversation_id"]
     assert state["app"]["credits"] == "VISION — built by SPIRIT ORG"
     assert state["credentials"] == {"remote_api_key_stored": True, "hf_token_stored": True}
+    assert state["paths"]["installation_mode"] == "standard"
+    assert settings["paths"]["installation_mode"] == "standard"
+    assert state["paths"]["app_data"] == settings["paths"]["app_data"]
     assert "remote-secret-value" not in encoded
     assert "hf-secret-value" not in encoded
     tool_names = {item["name"] for item in state["tools"]}

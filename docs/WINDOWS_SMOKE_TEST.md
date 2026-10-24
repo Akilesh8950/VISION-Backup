@@ -15,7 +15,8 @@ Record with the results:
 - CPU, RAM, GPU, driver and VRAM;
 - llama.cpp build printed by the app;
 - GGUF path, byte size and, if practical, SHA-256;
-- source launch or packaged `dist\VISION\VISION.exe` launch;
+- source launch, packaged `dist\VISION\VISION.exe` launch, and installer
+  scope/mode/folder for each installed test;
 - every failed step, exact prompt, screenshot and relevant server-log tail.
 
 A step is not “close enough” if it needs an undocumented workaround. Record it
@@ -395,7 +396,65 @@ Then:
 Do not replace the source-launch result with the packaged result or vice
 versa; record both.
 
-## 14. Minimum pass gate
+## 14. Installer and portable build
+
+Install Inno Setup 6 and build the distributable setup plus portable ZIP:
+
+```powershell
+winget install --id JRSoftware.InnoSetup -e -s winget
+.\scripts\build_installer.ps1 -PortableZip
+Get-FileHash dist\installer\VISION-Setup-*-x64.exe -Algorithm SHA256
+```
+
+Verify `dist\installer\` contains the setup EXE, its `.sha256`, the portable
+ZIP and its `.sha256`.
+
+### 14.1 Current-user portable install
+
+Use a test folder on a non-system drive if available, otherwise a writable
+profile folder:
+
+1. Run the installer and choose **Install for current user only**.
+2. Confirm **Portable folder (recommended)** is enabled and selected.
+3. Browse to a new folder such as `D:\VISION-smoke\VISION`.
+4. Enable shortcuts, install, and launch from the Finish page.
+5. Confirm the folder contains `VISION.exe`, `VISION.portable`, `_internal\`,
+   `data\` and `workspace\`.
+6. Complete first-run downloads and confirm the GGUF lands in
+   `<install>\data\models\`, llama.cpp under `<install>\data\bin\`, and the
+   WebView profile under `<install>\data\webview\`.
+7. In **Settings → Privacy & feedback**, confirm Installation mode says
+   **Portable folder** and the App data/Workspace paths are under the chosen
+   folder.
+8. Close VISION, copy the entire folder to a second test path, launch from the
+   copy, and confirm history/settings are present. Record that Windows
+   Credential Manager secrets are intentionally not inside the copied folder.
+9. Uninstall from Windows Settings and confirm program files/shortcuts are
+   removed while `data\` and `workspace\` remain. Manually delete the test
+   folder only after recording that preservation behaviour.
+
+### 14.2 All-users standard install
+
+On a VM or disposable test account:
+
+1. Run the installer and choose **Install for all users**.
+2. Confirm the administrator prompt appears, Portable is disabled, and
+   Standard Windows data is selected.
+3. Install to Program Files and launch as the original non-elevated user.
+4. Confirm there is no `VISION.portable` beside `VISION.exe`.
+5. Confirm Settings shows **Standard Windows data**, App data under
+   `%LOCALAPPDATA%\VISION`, workspace under `%USERPROFILE%\VISION\workspace`,
+   and WebView profile under `%LOCALAPPDATA%\VISION\webview`.
+6. Uninstall and record that standard user data remains until manually
+   deleted.
+
+### 14.3 Portable ZIP
+
+Extract `VISION-*-portable-x64.zip` to a clean test folder, confirm
+`VISION.portable`, `data\` and `workspace\` exist beside `VISION.exe`, then
+launch and repeat the Settings path checks from 14.
+
+## 15. Minimum pass gate
 
 Do not call the Windows build release-ready unless all are true:
 
@@ -407,4 +466,7 @@ Do not call the Windows build release-ready unless all are true:
 - all five widgets render and export PNG/CSV;
 - safety confirmations/blocks pass;
 - packaged EXE launches outside the repo with bundled `app\web`;
+- current-user portable and all-users standard installer flows in section 14
+  select the correct folders, preserve data correctly on uninstall, and show
+  the correct mode/paths in Settings;
 - no crash, secret leak, unconsented extension action or history loss occurs.

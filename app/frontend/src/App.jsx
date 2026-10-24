@@ -882,7 +882,7 @@ export default function App() {
                     <div className="field full"><label>Hugging Face token</label><input className="input" type="password" autoComplete="new-password" placeholder={credentials.hf_token_stored ? 'Stored in Credential Manager' : 'Not stored'} value={form.hf_token} onChange={(e) => setForm({ ...form, hf_token: e.target.value })} /><small>Needed only for gated downloads or feedback upload.</small></div>
                     <label className="check-row"><input type="checkbox" disabled={!credentials.hf_token_stored} checked={form.clear_hf_token} onChange={(e) => setForm({ ...form, clear_hf_token: e.target.checked })} />Remove stored HF token on save</label>
                   </div>
-                  <div style={{ marginTop: 16 }}><StatusRows rows={[['App data', paths.app_data], ['Workspace', paths.workspace]]} /></div></>
+                  <div style={{ marginTop: 16 }}><StatusRows rows={[['Installation mode', paths.installation_mode === 'portable' ? 'Portable folder' : paths.installation_mode === 'custom' ? 'Custom VISION_HOME' : 'Standard Windows data'], ['Installation folder', paths.installation_root || 'Source / development run'], ['App data', paths.app_data], ['Workspace', paths.workspace]]} /></div></>
                 ) : settingsTab === 'extensions' ? (
                   <><h3>Extensions</h3><p className="section-copy">Skills are metadata-first. MCP and connector tools appear only after their exact toolset is trusted.</p>
                   <h4>Skills</h4>

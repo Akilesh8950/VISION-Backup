@@ -20,6 +20,26 @@ available as a rollback and advanced-management surface with `--qt`.
 
 ![VISION React interface in dark theme](docs/screenshots/react-dark-conversation.png)
 
+## Install on Windows
+
+For the normal end-user installation, build or download the Inno Setup
+installer and follow [docs/INSTALLATION.md](docs/INSTALLATION.md). The
+recommended choices are **current user only** → **Portable folder** → a
+writable SSD folder such as `D:\VISION`. Portable mode keeps the app, model,
+llama.cpp, settings, history, logs, skills, WebView2 profile and workspace in
+that one folder.
+
+Developer release build:
+
+```powershell
+winget install --id JRSoftware.InnoSetup -e -s winget
+.\scripts\build_installer.ps1
+# Optional: also create a no-install portable ZIP
+.\scripts\build_installer.ps1 -PortableZip
+```
+
+Output is written to `dist\installer\` with a SHA-256 checksum file.
+
 ## Frozen model and inference contract
 
 - Model: `vision-ornith-1.5-9b-q4_k_m.gguf` (5.24 GiB) from
@@ -130,7 +150,7 @@ use `python -m vision_app` for real chat, files, settings and native dialogs.
 
 ## Data locations
 
-Application state lives in `%LOCALAPPDATA%\VISION\`:
+Standard Windows mode keeps application state in `%LOCALAPPDATA%\VISION\`:
 
 - `config.json`
 - `history.sqlite3`
@@ -140,14 +160,28 @@ Application state lives in `%LOCALAPPDATA%\VISION\`:
 - `skills\`
 - `extensions\mcp_servers.json`, `extensions\connectors.json`
 - `telemetry\needs.jsonl`
+- `webview\` for the WebView2 profile/cache
 - `checkpoints\` for code-workspace pre-write snapshots
 
-Tool file operations default to `%USERPROFILE%\VISION\workspace`. Relative
-tool paths resolve there. Writes show the resolved absolute path and ask for
-confirmation outside the workspace.
+In Standard mode, tool file operations default to
+`%USERPROFILE%\VISION\workspace`.
+
+Portable mode is selected by the installer (or portable ZIP) when a frozen
+`VISION.exe` has `VISION.portable` beside it. It instead uses:
+
+```text
+<install folder>\data\
+<install folder>\workspace\
+```
+
+Path precedence is `VISION_HOME` first, then frozen portable mode, then the
+standard OS locations. Relative tool paths resolve in the active workspace.
+Writes show the resolved absolute path and ask for confirmation outside the
+workspace. Settings shows the active installation mode and exact folders.
 
 Secrets are never stored in JSON config files. HF tokens, remote endpoint keys
-and MCP/connector credentials use Windows Credential Manager on Windows.
+and MCP/connector credentials use Windows Credential Manager on Windows, even
+in portable mode.
 
 ## What is included
 
@@ -300,6 +334,20 @@ above first (or pass `-BuildFrontend`) and include the regenerated
 `app\web` output in the same commit. Launch the packaged EXE from outside the repository to
 prove that it is not accidentally reading frontend files from the source
 tree.
+
+For the distributable Windows setup, use the Inno Setup wrapper instead:
+
+```powershell
+.\scripts\build_installer.ps1            # app + installer + SHA-256
+.\scripts\build_installer.ps1 -PortableZip
+.\scripts\build_installer.ps1 -SkipAppBuild  # recompile setup from dist\VISION
+```
+
+The installer asks current-user vs all-users, then Portable vs Standard data,
+then the destination folder. See
+[docs/INSTALLATION.md](docs/INSTALLATION.md) for the complete owner/end-user
+tutorial, moving/backup/update/uninstall steps, silent install forms, and
+troubleshooting.
 
 ## Test instructions
 

@@ -7,11 +7,19 @@ from pathlib import Path
 
 from .constants import GGUF_FILENAME
 
+PORTABLE_MARKER_FILENAME = "VISION.portable"
+
 
 @dataclass(frozen=True)
 class AppPaths:
     app_data: Path
     workspace: Path
+    installation_mode: str = "standard"
+    installation_root: Path | None = None
+
+    @property
+    def is_portable(self) -> bool:
+        return self.installation_mode == "portable"
 
     @property
     def config_file(self) -> Path:
@@ -88,17 +96,58 @@ class AppPaths:
             directory.mkdir(parents=True, exist_ok=True)
 
 
+def portable_install_root() -> Path | None:
+    """Return the portable root when running a frozen portable install.
+
+    The Windows installer writes ``VISION.portable`` beside ``VISION.exe``
+    only for portable mode. Source/development launches deliberately ignore
+    the marker so tests and local runs keep their normal OS data locations.
+    """
+
+    if not getattr(sys, "frozen", False):
+        return None
+    exe_dir = Path(sys.executable).resolve().parent
+    if (exe_dir / PORTABLE_MARKER_FILENAME).is_file():
+        return exe_dir
+    return None
+
+
 def get_paths() -> AppPaths:
+    frozen_root = (
+        Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else None
+    )
     override = os.environ.get("VISION_HOME")
     if override:
         root = Path(override).expanduser()
-        return AppPaths(app_data=root, workspace=root / "workspace")
+        return AppPaths(
+            app_data=root,
+            workspace=root / "workspace",
+            installation_mode="custom",
+            installation_root=frozen_root,
+        )
+
+    portable_root = portable_install_root()
+    if portable_root is not None:
+        return AppPaths(
+            app_data=portable_root / "data",
+            workspace=portable_root / "workspace",
+            installation_mode="portable",
+            installation_root=portable_root,
+        )
 
     home = Path.home()
     if sys.platform == "win32":
         local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData/Local")
         profile = Path(os.environ.get("USERPROFILE") or home)
-        return AppPaths(app_data=local / "VISION", workspace=profile / "VISION/workspace")
+        return AppPaths(
+            app_data=local / "VISION",
+            workspace=profile / "VISION/workspace",
+            installation_root=frozen_root,
+        )
 
     data_home = Path(os.environ.get("XDG_DATA_HOME") or home / ".local/share")
-    return AppPaths(app_data=data_home / "VISION", workspace=home / "VISION/workspace")
+    return AppPaths(
+        app_data=data_home / "VISION",
+        workspace=home / "VISION/workspace",
+        installation_root=frozen_root,
+    )
