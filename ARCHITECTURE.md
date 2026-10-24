@@ -2,6 +2,14 @@
 
 VISION — built by SPIRIT ORG
 
+> **Current UI implementation note:** the default renderer is now the
+> offline React application in `app/frontend/`, built by Vite into
+> `app/web/` and hosted by pywebview/WebView2 through the unchanged
+> `vision_app.web_bridge` contract. The PySide6 view layer described below is
+> retained as the `--qt` rollback/advanced-management surface. Shared backend
+> services, transport, tools, safety, telemetry and state contracts remain as
+> documented.
+
 ## 1. System overview
 
 ```

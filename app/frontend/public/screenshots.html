@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="0; url=./index.html?gallery=1">
+    <title>VISION — React UI gallery</title>
+    <style>
+      :root { color-scheme: dark; font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #100f0e; color: #f4f1ea; }
+      main { width: min(560px, calc(100% - 40px)); padding: 28px; border: 1px solid rgba(244,241,234,.12); border-radius: 18px; background: #1b1a17; }
+      h1 { margin: 0 0 10px; font-size: 24px; }
+      p { color: #aaa398; line-height: 1.6; }
+      a { color: #7aa8ff; font-weight: 650; }
+      code { color: #f4f1ea; }
+    </style>
+    <script>
+      window.location.replace('./index.html?gallery=1')
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Opening the VISION React UI gallery…</h1>
+      <p>
+        If the gallery does not open, serve this folder locally and visit
+        <a href="./index.html?gallery=1">index.html?gallery=1</a>.
+        From <code>app\web</code>, run
+        <code>python -m http.server 8000 --bind 127.0.0.1</code>,
+        then open <code>http://127.0.0.1:8000/screenshots.html</code>.
+      </p>
+      <p>Static review captures are also saved under <code>docs\screenshots\</code> in the source tree.</p>
+    </main>
+  </body>
+</html>

@@ -8,12 +8,17 @@ OpenAI-compatible responses, exposes a validated tool runtime, renders
 generative-UI widgets, and supports portable Skills, MCP servers and custom
 remote-MCP connectors.
 
-The default interface is local HTML/CSS/JS in `app/web/`, hosted by pywebview
-and Microsoft Edge WebView2. It is deliberately not an Electron app and has no
-Node build step, bundler, JS framework, CDN dependency or business logic in
-JavaScript. `src/vision_app/web_bridge.py` is a thin adapter over the same
-Python services used by the previous Qt interface. The Qt interface remains
+The default interface is a premium offline React application hosted by
+pywebview and Microsoft Edge WebView2. React source lives in
+`app/frontend/`; Vite builds relative-path static assets into `app/web/` for
+the desktop shell. The production build is committed, so end users and the
+PyInstaller build do **not** need Node at runtime and the interface makes no
+CDN requests. `src/vision_app/web_bridge.py` remains a thin adapter over the
+same Python services used by the previous Qt interface; the React migration
+did not change backend contracts or business logic. The Qt interface remains
 available as a rollback and advanced-management surface with `--qt`.
+
+![VISION React interface in dark theme](docs/screenshots/react-dark-conversation.png)
 
 ## Frozen model and inference contract
 
@@ -44,6 +49,10 @@ python -m pip install -e . --no-deps
 python -m vision_app
 ```
 
+The committed production frontend in `app\web` is used as-is; Node is only
+needed if you change the React source and rebuild it (see **Frontend
+development** below).
+
 Windows 11 normally provides the Microsoft Edge WebView2 Runtime. If the
 window cannot start on a stripped Windows installation, install Microsoft's
 Evergreen WebView2 Runtime and launch again.
@@ -66,20 +75,58 @@ python -m vision_app --debug  # WebView2 interface with pywebview debug enabled
 python -m vision_app --qt     # legacy PySide6 rollback interface
 ```
 
-### Offline frontend
+### Offline React frontend
 
-Everything the web interface needs is in the repository:
+The interface is a local-first React application with an original warm
+graphite/ivory design system inspired by the quiet reading layout of modern
+chat products:
 
-- `app/web/index.html`, `app/web/styles/`, and ES modules in `app/web/js/`;
-- three.js 0.186.1, anime.js 4.5.0, Chart.js 4.6.1 and the Chart.js
-  dependency `@kurkle/color` 0.3.4 under `app/web/vendor/`;
-- local import-map entries for the vendored modules;
-- `app/web/screenshots.html`, a direct-open gallery for reviewing component
-  states without a running model.
+- React 19.3.1, React DOM 19.3.1 and Chart.js 4.6.1;
+- Vite 5.4.19 with `@vitejs/plugin-react` 4.3.4 for development builds;
+- custom inline SVG icons and VISION mark — no emoji chrome or icon font;
+- flat solid surfaces and solid chart colors — no CSS or canvas gradients in
+  VISION-authored frontend code;
+- system font stacks only, so there are no web-font downloads;
+- `app/frontend/` contains the editable source;
+- `app/web/` contains the committed production build loaded by pywebview;
+- `app/web/licenses/` contains the runtime library license texts;
+- `app/web/screenshots.html` redirects to the built-in `?gallery=1` review
+  mode, and `docs/screenshots/` contains static review captures.
 
-Three.js is vendored as requested but intentionally not loaded by the current
-2D interface. After the model/server have been downloaded, disconnecting the
-network must not blank or degrade the interface.
+After the model/server have been downloaded, disconnecting the network must
+not blank or degrade the interface.
+
+#### Frontend development
+
+Use Node 20+ only when changing the UI:
+
+```powershell
+cd app\frontend
+npm ci --legacy-peer-deps
+npm run build
+cd ..\..
+python -m vision_app
+```
+
+`npm ci` uses the committed lockfile; `--legacy-peer-deps` matches the
+validated Vite 5 / plugin peer resolution in this repository. The build
+cleans and rewrites `app\web` with relative `./assets/...` paths. Commit the
+generated `app\web` output with any React source change so source and
+packaged launches remain Node-free.
+
+For a browser-only visual preview, either run `npm run dev` in
+`app\frontend` or serve the production build:
+
+```powershell
+cd app\web
+python -m http.server 8000 --bind 127.0.0.1
+```
+
+Then open `http://127.0.0.1:8000/`,
+`http://127.0.0.1:8000/?gallery=1`, or
+`http://127.0.0.1:8000/screenshots.html`. A normal browser has no pywebview
+bridge, so VISION labels this Preview mode and uses simulated demo responses;
+use `python -m vision_app` for real chat, files, settings and native dialogs.
 
 ## Data locations
 
@@ -122,7 +169,7 @@ for guarded public web-page reading and citations. Tool arguments are
 validated with pydantic/JSON Schema before execution; failures return a
 corrective `role:"tool"` message so the model can retry.
 
-Generative UI tools render as local web components:
+Generative UI tools render as local React components:
 
 - sortable sticky-header table
 - Chart.js bar/line/pie/scatter chart
@@ -134,13 +181,14 @@ Generative UI tools render as local web components:
 Projects provide instructions, a root folder, conversation assignment,
 extension scoping and knowledge sources. Selected documents/code are indexed
 locally with SQLite FTS5 and cited as `[L1]`, `[L2]`, etc. Supported baseline
-knowledge files include text/Markdown/code, PDF and DOCX. The web interface
+knowledge files include text/Markdown/code, PDF and DOCX. The React interface
 selects the active project and uses its indexed sources during chat.
 
 Code mode provides a project tree and preview, checkpointed overwrites,
 restore, read-only Git status and user-defined argv test profiles. Test
 profiles are started only by the user — they are not model tools,
-and there is no shell or Git-mutation tool. In this first web migration,
+and there is no shell or Git-mutation tool. In the current React interface,
+project selection and cited retrieval are available in chat, while detailed
 project/code management screens remain available through the `--qt` legacy
 surface; the backend services and data are shared.
 
@@ -232,6 +280,10 @@ Then:
 .\scripts\build.ps1
 ```
 
+Use `.\scripts\build.ps1 -BuildFrontend` instead if Node is installed and
+you want the script to run `npm ci --legacy-peer-deps` and rebuild
+`app\frontend` before packaging.
+
 Output:
 
 ```text
@@ -239,10 +291,15 @@ dist\VISION\VISION.exe
 ```
 
 The script uses a one-folder PyInstaller build, `assets\vision.ico` and
-`assets\version_info.txt`. It bundles `app\web` and fails if
-`app\web\index.html` is missing from the output. Launch the packaged EXE from
-outside the repository to prove that it is not accidentally reading frontend
-files from the source tree.
+`assets\version_info.txt`. It bundles the committed React production output
+from `app\web` and fails if `app\web\index.html` is missing from the output.
+Node is not invoked by the default `build.ps1` path; it verifies that
+`app\web\index.html` and every referenced JS/CSS asset exist before and
+after packaging. If you changed `app\frontend\src`, run the frontend build
+above first (or pass `-BuildFrontend`) and include the regenerated
+`app\web` output in the same commit. Launch the packaged EXE from outside the repository to
+prove that it is not accidentally reading frontend files from the source
+tree.
 
 ## Test instructions
 
@@ -255,27 +312,34 @@ python -m compileall -q src scripts tests
 python scripts\run_bench.py --mode replay
 ```
 
-Node is **not** a runtime or build requirement. If Node happens to be
-installed, these read-only syntax checks are a useful extra:
+Node is **not** required to run the committed build or create the Windows
+executable. It is required only to rebuild the React frontend after changing
+`app\frontend` or to verify that the committed output is reproducible:
 
 ```powershell
-Get-ChildItem app\web\js\*.js | ForEach-Object { node --check $_.FullName }
+cd app\frontend
+npm ci --legacy-peer-deps
+npm run build
+cd ..\..
+git status --short app\web app\frontend
 ```
 
-Review the visual states without a model by opening
-`app\web\screenshots.html`. To test the real ES-module graph over HTTP in a
-browser (without the Python bridge), run:
+Review static captures in `docs\screenshots\react-*.png`, or serve the built
+frontend locally:
 
 ```powershell
 cd app\web
 python -m http.server 8000 --bind 127.0.0.1
 ```
 
-Then open `http://127.0.0.1:8000/` and
-`http://127.0.0.1:8000/screenshots.html`. The app page will announce Preview
-mode because `window.pywebview` is absent; use the desktop launch for chat.
-In browser DevTools → Network, reload and confirm every script/style request
-is same-origin/local and there are no CDN requests.
+Then open `http://127.0.0.1:8000/`,
+`http://127.0.0.1:8000/?gallery=1`, and
+`http://127.0.0.1:8000/screenshots.html` (which redirects to the gallery).
+The browser page announces Preview mode because `window.pywebview` is absent;
+use the desktop launch for real chat and native behavior. In browser DevTools
+→ Network, reload and confirm the page, one JavaScript bundle and one CSS
+bundle are same-origin/local requests and there are no CDN, font or image
+requests.
 
 For the managed local inference endpoint:
 
@@ -299,8 +363,10 @@ tool-call stream.
 
 - Confirm the Microsoft Edge WebView2 Runtime is installed.
 - Run `python -m vision_app --debug` and capture the console error.
-- From the source tree, confirm `app\web\index.html` exists. For a custom
-  layout, set `VISION_WEB_DIR` to the directory containing `index.html`.
+- From the source tree, confirm `app\web\index.html` and its referenced
+  `./assets/*.js` / `./assets/*.css` files exist. If the frontend was just
+  changed, rebuild it with the Node commands above. For a custom layout, set
+  `VISION_WEB_DIR` to the directory containing `index.html`.
 - Use `python -m vision_app --qt` as the rollback while collecting the
   WebView2 error; both interfaces use the same data directory.
 

@@ -6,6 +6,13 @@ Status: proposed design for owner approval (PLAN A15). Comparator names appear
 only in this planning document for pattern reference. They never appear in the
 shipped UI, source comments, prompts, or marketing copy inside the app.
 
+Implementation supersession: the shipping default UI is an original offline
+React/WebView2 interpretation of the sidebar, centered transcript, floating
+composer, reasoning/tool disclosure and work-surface patterns in this spec.
+It uses warm graphite/ivory flat surfaces, custom SVG icons and no CSS/canvas
+gradients. Current captures are in `docs/screenshots/react-*.png`; the Qt
+implementation remains the `--qt` rollback surface.
+
 ## 1. Design intent
 
 VISION should feel like a focused desktop workbench, not a web page wrapped in

@@ -62,30 +62,56 @@ Expected:
 - compileall exits 0;
 - replay bench reports no release-blocking defects.
 
-Node is not required to run or build VISION. If it is already installed, run
-this extra read-only JavaScript syntax check:
+Node is not required to run the committed React build or create the Windows
+executable. If Node 20+ is installed and you need to verify/rebuild the
+frontend from `app\frontend`, run:
 
 ```powershell
-Get-ChildItem app\web\js\*.js | ForEach-Object { node --check $_.FullName }
+cd app\frontend
+npm ci --legacy-peer-deps
+npm run build
+cd ..\..
+git status --short app\web app\frontend
 ```
+
+The build must complete without errors and rewrite `app\web` with
+`index.html`, one referenced JavaScript bundle, one referenced CSS bundle,
+`screenshots.html` and `licenses\`. Record any unexpected generated-file
+diff before testing a release candidate.
 
 ## 3. Offline frontend and visual review
 
-### 3.1 Component gallery
+### 3.1 Static review captures and React gallery
 
-Open `app\web\screenshots.html` directly in Edge/Chrome. Review:
+First inspect the committed PNG review set in `docs\screenshots\`:
 
-1. app frame, empty state, 264 px sidebar and floating composer;
-2. transcript, reasoning, streaming and incomplete states;
-3. running/success/error/expanded tool cards;
-4. table, chart, cards, timeline and diff;
-5. settings sheet, palette, confirmation, banners/toasts and sources;
-6. controls and endpoint chips.
+- `react-dark-empty.png` and `react-light-empty.png`;
+- `react-dark-conversation.png` and `react-light-gallery.png`;
+- `react-chart-sources.png`;
+- `react-diff.png`;
+- `react-settings.png` and `react-server-console.png`.
 
-Use the gallery buttons to toggle dark/light and the 64 px sidebar. Tab
-through section 6 and confirm a visible 2 px accent focus ring.
+Then serve the production build as in section 3.2 and open
+`http://127.0.0.1:8000/screenshots.html`; it must redirect to
+`http://127.0.0.1:8000/index.html?gallery=1`. In the gallery, scroll the
+entire demo transcript and review:
 
-### 3.2 Real ES-module graph over HTTP
+1. app frame, 282 px sidebar, custom window controls and floating composer;
+2. user bubbles, assistant text, collapsed reasoning and message actions;
+3. success tool cards with expandable arguments/results;
+4. system-status cards, chart, sortable table, timeline and side-by-side
+   diff — all five generative widget kinds;
+5. source citation chips and the Sources inspector;
+6. Settings, Server console and Activity sheets from the sidebar;
+7. dark/light themes and the collapsed 68 px sidebar.
+
+Do not judge the React production build by double-clicking
+`app\web\index.html` from Explorer: Chromium/WebView module handling is
+tested through the local HTTP server and, most importantly, through the real
+pywebview launch in section 4. Tab through the gallery and confirm a visible
+2 px accent focus ring, including on table sort buttons.
+
+### 3.2 Production bundle over HTTP
 
 In a separate PowerShell window:
 
@@ -97,17 +123,20 @@ python -m http.server 8000 --bind 127.0.0.1
 Open these local URLs:
 
 - `http://127.0.0.1:8000/`
+- `http://127.0.0.1:8000/?gallery=1`
 - `http://127.0.0.1:8000/screenshots.html`
 
-The first page will say Preview mode because the pywebview bridge is absent in
-a normal browser. That is expected. Open DevTools (F12) → Network, reload,
+The first page will say Preview mode because the pywebview bridge is absent
+in a normal browser. That is expected, and its simulated responses are not
+evidence of real model/tool behavior. Open DevTools (F12) → Network, reload,
 and confirm:
 
-- HTML, CSS, JS and vendor files are all `127.0.0.1` requests;
-- there are no CDN or other external script/style/font requests;
-- there are no 404s for `three.core.js`, `chunks/index.js` or
-  `kurkle-color.esm.js`;
-- the console has no module-resolution error for `@kurkle/color`.
+- `index.html`, one `./assets/*.js` bundle and one `./assets/*.css` bundle
+  are the frontend requests;
+- all frontend requests are `127.0.0.1`;
+- there are no CDN or other external script/style/font/image requests;
+- there are no missing-asset 404s;
+- the console has no React, Chart.js or module-loading error.
 
 Stop the HTTP server with Ctrl+C.
 
@@ -181,10 +210,11 @@ Run each prompt in a new or clearly named chat.
    internally; Enter sends and Shift+Enter inserts a line.
 6. Press Ctrl+K. Run commands for New chat, Settings, Server console, theme,
    sidebar and an existing chat title.
-7. Collapse the sidebar. Confirm it is 64 px, icons remain usable, and the
+7. Collapse the sidebar. Confirm it is 68 px, icons remain usable, and the
    state is acceptable after relaunch.
 8. Rename, pin/unpin, search and delete a disposable conversation.
-9. Attach a small `.txt` file with the paperclip and ask a question about it.
+9. Attach a small `.txt` file with the composer's **+ / Attach text files**
+   button and ask a question about it.
    Confirm the source file is opened by the native picker and the chip can be
    removed before sending. Test a file larger than 256 KB and confirm a safe
    visible error rather than a crash.
@@ -243,7 +273,7 @@ Repeat one chart/table test in light theme and with the window narrowed.
    inspector highlights the correct source and the external-open button uses
    the system browser.
 3. Use the legacy surface or existing data to create/index a Project source if
-   needed, return to the web UI, select the Project, and ask a question whose
+   needed, return to the React UI, select the Project, and ask a question whose
    answer is only in that source. Confirm `[L#]`, locator text and opening the
    local source.
 4. Read a public URL with `read_url`; verify its source card. Confirm a
@@ -335,6 +365,10 @@ Test with disposable files only:
 
 ## 13. Packaged build
 
+`build.ps1` packages the committed `app\web` React output and does not invoke
+Node. If `app\frontend` changed since the last frontend build, first complete
+the optional rebuild in section 2. Then run:
+
 ```powershell
 .\scripts\build.ps1
 Test-Path dist\VISION\VISION.exe
@@ -369,7 +403,7 @@ Do not call the Windows build release-ready unless all are true:
 - first run downloads/verifies model and supported llama.cpp;
 - `--flash-attn on` server reaches Healthy;
 - structured `get_weather` tool call passes with no raw tool syntax leak;
-- offline relaunch and module/CDN checks pass;
+- offline relaunch and local React bundle/no-CDN checks pass;
 - all five widgets render and export PNG/CSV;
 - safety confirmations/blocks pass;
 - packaged EXE launches outside the repo with bundled `app\web`;

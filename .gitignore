@@ -11,3 +11,8 @@ third_party/llama.cpp/
 src/vision_app/_build_info.py
 *.gguf
 .env
+.cache/
+.npm/
+.smoke-data/
+node_modules/
+app/frontend/node_modules/

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$Python = "python",
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [switch]$BuildFrontend
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,39 @@ Set-Location $Root
 if (-not $SkipInstall) {
     & $Python -m pip install --upgrade pip
     & $Python -m pip install -r requirements.txt
+}
+
+if ($BuildFrontend) {
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        throw "-BuildFrontend requires Node/npm. Install Node 20+ or omit the switch to package the committed app\web build."
+    }
+    Push-Location (Join-Path $Root "app\frontend")
+    try {
+        & npm ci --legacy-peer-deps
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE" }
+        & npm run build
+        if ($LASTEXITCODE -ne 0) { throw "React frontend build failed with exit code $LASTEXITCODE" }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+$WebDir = Join-Path $Root "app\web"
+$WebIndex = Join-Path $WebDir "index.html"
+if (-not (Test-Path $WebIndex)) {
+    throw "React frontend build is missing ($WebIndex). Run: cd app\frontend; npm ci --legacy-peer-deps; npm run build"
+}
+$WebIndexText = Get-Content $WebIndex -Raw
+$AssetRefs = @([regex]::Matches($WebIndexText, '(?:src|href)="\./(assets/[^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+if ($AssetRefs.Count -lt 2) {
+    throw "React frontend index does not reference its JS/CSS assets. Rebuild app\frontend before packaging."
+}
+foreach ($assetRef in $AssetRefs) {
+    $assetPath = Join-Path $WebDir ($assetRef -replace '/', '\')
+    if (-not (Test-Path $assetPath)) {
+        throw "React frontend asset referenced by app\web\index.html is missing: $assetPath"
+    }
 }
 
 $Commit = "dev"
@@ -53,8 +87,21 @@ $WebIndexCandidates = @(
     (Join-Path $DistDir "_internal\app\web\index.html"),
     (Join-Path $DistDir "app\web\index.html")
 )
-if (-not ($WebIndexCandidates | Where-Object { Test-Path $_ })) {
+$BundledWebIndex = $WebIndexCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $BundledWebIndex) {
     throw "Expected web frontend was not bundled under dist\VISION (app\web\index.html missing)"
+}
+$BundledWebDir = Split-Path -Parent $BundledWebIndex
+foreach ($assetRef in $AssetRefs) {
+    $bundledAsset = Join-Path $BundledWebDir ($assetRef -replace '/', '\')
+    if (-not (Test-Path $bundledAsset)) {
+        throw "Bundled React frontend is missing an asset referenced by index.html: $bundledAsset"
+    }
+}
+foreach ($extra in @("screenshots.html", "licenses\react.txt", "licenses\chartjs.txt")) {
+    if (-not (Test-Path (Join-Path $BundledWebDir $extra))) {
+        throw "Bundled React frontend is missing expected file: $extra"
+    }
 }
 
 $BundledLlama = Join-Path $Root "third_party\llama.cpp"
