@@ -912,3 +912,113 @@ svg.icon { display: block; flex: 0 0 auto; }
 /* Long transcripts: entrance-animating dozens of rows on chat switch is
    wasted paint. App.jsx adds .many past 24 messages. */
 .reading.many .msg-row { animation: none; }
+
+/* Vision Live: push-to-talk voice, translucent captions, circular meter,
+   one-frame screen preview, and the floating mini window. Flat colours
+   and translucency only — no gradients. */
+.live-title-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--muted); font-size: 12px; font-weight: 680; cursor: pointer;
+}
+.live-title-btn:hover { background: var(--surface-2); color: var(--text); }
+.live-composer-btn { color: var(--accent); }
+.live-overlay { z-index: 75; }
+.live-panel {
+  width: min(720px, 100%); max-height: calc(100dvh - 44px); overflow-y: auto;
+  padding: 22px; border: 1px solid var(--border-strong); border-radius: 22px;
+  background: var(--bg-raise); box-shadow: var(--shadow); animation: pop 200ms var(--ease) both;
+}
+.live-head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
+.live-head h2 { margin: 3px 0 5px; font-size: 24px; letter-spacing: -0.02em; }
+.live-head p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.live-eyebrow { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: 0.09em; text-transform: uppercase; }
+.live-mode-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.live-mode, .live-status {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--muted); font-size: 12px; font-weight: 650;
+}
+.live-mode.ready { color: var(--good); }
+.live-status { margin-left: auto; color: var(--accent); }
+.live-orb {
+  --orb-size: 164px; --orb-radius: 62px;
+  position: relative; width: var(--orb-size); height: var(--orb-size); margin: 24px auto 18px;
+  color: var(--accent);
+}
+.live-orb.small { --orb-size: 116px; --orb-radius: 43px; margin: 16px auto 12px; }
+.live-orb-ring {
+  position: absolute; inset: 19px; border: 1px solid var(--border-strong); border-radius: 50%;
+  background: var(--surface);
+}
+.live-orb.phase-listening .live-orb-ring { border-color: var(--accent); }
+.live-orb.phase-error { color: var(--bad); }
+.live-orb.phase-speaking { color: var(--good); }
+.live-orb-bars { position: absolute; inset: 0; }
+.live-orb.phase-thinking .live-orb-bars, .live-orb.phase-transcribing .live-orb-bars, .live-orb.phase-capturing .live-orb-bars { animation: live-spin 5.5s linear infinite; }
+.live-orb-bars span {
+  position: absolute; left: calc(50% - 1.5px); top: calc(50% - 11px); width: 3px; height: 22px;
+  transform-origin: center;
+}
+.live-orb-bars i {
+  display: block; width: 3px; min-height: 5px; border-radius: 99px; background: currentColor;
+  opacity: 0.82; transition: height 90ms linear;
+}
+.live-orb.phase-speaking .live-orb-bars i { animation: live-bar 760ms ease-in-out infinite alternate; }
+.live-orb-core {
+  position: absolute; left: 50%; top: 50%; display: grid; place-items: center;
+  width: 58px; height: 58px; border: 1px solid var(--border); border-radius: 50%;
+  background: var(--bg-raise); color: var(--text); transform: translate(-50%, -50%);
+}
+.live-orb.small .live-orb-core { width: 46px; height: 46px; }
+@keyframes live-bar { from { transform: scaleY(0.35); } to { transform: scaleY(1.35); } }
+@keyframes live-spin { to { transform: rotate(360deg); } }
+.live-captions { display: grid; gap: 8px; max-width: 610px; margin: 0 auto; }
+.live-caption {
+  padding: 10px 13px; border: 1px solid var(--border); border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.live-caption span { display: block; margin-bottom: 3px; color: var(--faint); font-size: 10px; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.live-caption p { margin: 0; color: var(--text); font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.live-caption.assistant { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); }
+.live-caption.error { border-color: var(--bad); }
+.live-setup, .live-frame-preview, .live-pending {
+  margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
+}
+.live-setup p, .live-frame-preview p { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.live-frame-preview { display: grid; grid-template-columns: minmax(170px, 0.9fr) minmax(0, 1.1fr); gap: 14px; align-items: start; }
+.live-frame-preview img { width: 100%; max-height: 230px; object-fit: contain; border: 1px solid var(--border-strong); border-radius: 10px; background: #000; }
+.live-controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 18px; }
+.live-talk {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px;
+  padding: 0 22px; border: 1px solid var(--text); border-radius: 999px; background: var(--text);
+  color: var(--bg); font-size: 14px; font-weight: 730; cursor: pointer; touch-action: none; user-select: none;
+}
+.live-talk.listening { background: var(--accent); border-color: var(--accent); color: #0a1224; }
+.live-talk:disabled { opacity: 0.48; cursor: not-allowed; }
+.live-pending { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12.5px; }
+.live-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-top: 17px; color: var(--faint); font-size: 11.5px; }
+.live-footer .check-row { margin: 0; }
+.live-footer > span { display: inline-flex; align-items: center; gap: 5px; }
+.live-mini-app { min-height: 100dvh; padding: 13px; background: var(--bg); color: var(--text); overflow: hidden; }
+.live-mini-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 740; }
+.live-mini-head > span { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
+.mini-caption { margin-top: 8px; }
+.mini-caption p { font-size: 12.5px; }
+.live-mini-actions { display: grid; grid-template-columns: 1fr auto auto; gap: 7px; margin-top: 12px; }
+.live-talk.mini { min-height: 42px; padding: 0 12px; font-size: 12.5px; }
+.live-mini-note { margin: 10px 0 0; color: var(--faint); font-size: 10.5px; text-align: center; }
+@media (max-width: 640px) {
+  .live-panel { padding: 17px; }
+  .live-status { margin-left: 0; }
+  .live-frame-preview { grid-template-columns: 1fr; }
+  .live-pending { align-items: stretch; flex-direction: column; }
+  .live-title-btn span { display: none; }
+  .live-title-btn { padding: 0 8px; }
+}
+@media (max-height: 620px) {
+  .live-orb { --orb-size: 124px; --orb-radius: 46px; margin-top: 14px; margin-bottom: 10px; }
+  .live-panel { padding-top: 15px; padding-bottom: 15px; }
+}
+.perf-low .live-caption, .motion-reduced .live-caption { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }

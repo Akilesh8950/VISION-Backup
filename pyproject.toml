@@ -24,6 +24,7 @@ dependencies = [
   "jsonschema",
   "pypdf",
   "python-docx",
+  "Pillow>=10.4",
 ]
 
 [project.optional-dependencies]

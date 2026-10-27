@@ -46,11 +46,19 @@ from .extensions.mcp_tools import make_mcp_tool_definition
 from .history import generate_conversation_title
 from .knowledge.parsers import parse_file as parse_document_file
 from .knowledge.retrieval import build_project_context
+from .live.screen_capture import capture_screen_frame, decode_image_data_url
+from .live.speech_to_text import (
+    MAX_WAV_BYTES,
+    ensure_speech_to_text,
+    speech_to_text_status,
+    transcribe_wav_bytes,
+)
 from .redaction import redact_value
 from .server.discovery import build_is_supported, detect_build, find_llama_server
 from .server.download_llama import download_llama
 from .server.hardware import detect_hardware, effective_profile, recommended_profile
 from .server.health import STARTUP_GRACE_SECONDS, HealthState, check_health_sync
+from .server.vision import screen_vision_status
 from .sync_service import SyncService
 from .telemetry.uploader import upload_needs_log
 from .tools.registry import ToolDefinition, ToolExecutionResult
@@ -65,6 +73,18 @@ MAX_ATTACHMENT_BYTES = 256 * 1024
 MAX_ATTACHMENTS = 10
 MAX_ATTACHMENTS_TOTAL_BYTES = 1_000_000
 MAX_EXPORT_BYTES = 20 * 1024 * 1024
+LIVE_STATUSES = {
+    "idle",
+    "listening",
+    "transcribing",
+    "thinking",
+    "speaking",
+    "capturing",
+    "preview",
+    "error",
+    "setup",
+}
+LIVE_MINI_ACTIONS = {"ptt_start", "ptt_stop", "share_frame", "stop", "open_live"}
 
 
 def _payload_dict(value: object) -> dict[str, Any]:
@@ -298,6 +318,24 @@ class VisionWebApi:
         self._latest_remote_size = 0
         self._window_maximized = False
         self._shutdown_called = False
+
+        # Vision Live ephemeral state. Captions/status only — microphone
+        # audio and screen-frame bytes are never stored here.
+        self._live_lock = threading.RLock()
+        self._live_state: dict[str, Any] = {
+            "active": False,
+            "status": "idle",
+            "caption": "",
+            "user_text": "",
+            "assistant_text": "",
+            "level": 0.0,
+            "screen_mode": False,
+            "frame_approved": False,
+            "speech_output": True,
+        }
+        self._live_command: dict[str, Any] = {"seq": 0, "action": ""}
+        self._live_mini_window: Any | None = None
+        self._live_mini_url = ""
 
         self.controller.callbacks = ChatCallbacks(
             on_content=lambda text: self._buffer_stream("content", text),
@@ -770,6 +808,215 @@ class VisionWebApi:
             payload["logs"] = self.server_manager.logs(300)
         return payload
 
+    # ------------------------------------------------------------------
+    # Vision Live: local speech-to-text, one-frame screen sharing, mini UI
+    # ------------------------------------------------------------------
+    def _live_capabilities(self) -> dict[str, Any]:
+        model = Path(self.config.model_path or self.paths.model_file)
+        stt = speech_to_text_status(self.paths, self.config)
+        vision = screen_vision_status(
+            self.config,
+            model,
+            server_running=self.server_manager.is_running,
+            server_command=list(getattr(self.server_manager, "command", []) or []),
+        )
+        return {
+            "voice_chat_available": bool(stt["available"]),
+            "speech_to_text": stt,
+            "screen_capture_available": sys.platform == "win32",
+            "screen_vision": vision,
+            "mini_open": self._live_mini_window is not None,
+            "privacy": {
+                "push_to_talk_only": True,
+                "audio_saved": False,
+                "screen_saved": False,
+                "screen_remote_allowed": False,
+                "computer_control": False,
+            },
+        }
+
+    def get_live_capabilities(self) -> dict[str, Any]:
+        return {"ok": True, "live": _json_safe(self._live_capabilities())}
+
+    def download_speech_to_text(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = _payload_dict(payload)
+        requested = str(data.get("model_size") or self.config.stt_model_size)
+
+        def work() -> dict[str, Any]:
+            result = ensure_speech_to_text(
+                self.paths,
+                self.config,
+                progress=lambda stage, downloaded, total: self._task_progress(
+                    "download_stt", f"Downloading {stage}", downloaded, total
+                ),
+                model_size=requested,
+            )
+            self.config.stt_binary_path = str(result["binary_path"])
+            self.config.stt_model_size = str(result["model_size"])
+            self.config.save(self.paths)
+            live = self._live_capabilities()
+            self._emit("live_updated", {"live": live})
+            return {"ok": True, "message": str(result["message"]), "live": live}
+
+        return self._run_task("download_stt", work)
+
+    def transcribe_live_audio(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = _payload_dict(payload)
+        encoded = data.get("audio_base64")
+        if not isinstance(encoded, str) or not encoded:
+            return {"ok": False, "message": "No voice clip was received."}
+        if len(encoded) > ((MAX_WAV_BYTES + 2) * 4 // 3) + 8:
+            return {"ok": False, "message": "That voice clip is too long. Please use a shorter message."}
+        try:
+            wav_bytes = base64.b64decode(encoded, validate=True)
+        except Exception:
+            return {"ok": False, "message": "That voice clip could not be read."}
+        try:
+            # The clip bytes are never logged and the transcription helper
+            # deletes its one temporary WAV on every path.
+            text = transcribe_wav_bytes(self.paths, self.config, wav_bytes)
+        except (RuntimeError, ValueError) as exc:
+            return {"ok": False, "message": str(exc), "live": self._live_capabilities()}
+        except Exception:
+            logger.exception("Vision Live transcription failed")
+            return {"ok": False, "message": "Local speech-to-text failed. Please try again."}
+        return {"ok": True, "text": text}
+
+    def capture_screen_frame(self) -> dict[str, Any]:
+        mini = self._live_mini_window
+        hidden = False
+        if mini is not None:
+            try:
+                mini.hide()
+                hidden = True
+                time.sleep(0.18)
+            except Exception:
+                hidden = False
+        try:
+            frame = capture_screen_frame()
+            return frame.payload()
+        except RuntimeError as exc:
+            return {"ok": False, "message": str(exc)}
+        except Exception:
+            logger.exception("Vision Live screen capture failed")
+            return {"ok": False, "message": "VISION could not capture the screen."}
+        finally:
+            if hidden and mini is not None:
+                try:
+                    mini.show()
+                except Exception:
+                    pass
+
+    def _validated_live_frame(self, payload: dict[str, Any]) -> tuple[str, str]:
+        data_url = str(payload.get("live_image_data_url") or "")
+        if not data_url:
+            return "", ""
+        if payload.get("live_screen_approved") is not True:
+            return "", "Preview and approve the screen frame before sharing it."
+        vision = self._live_capabilities()["screen_vision"]
+        if not vision.get("available"):
+            return "", str(vision.get("reason") or "Screen vision is not available with this model.")
+        try:
+            decode_image_data_url(data_url)
+        except ValueError as exc:
+            return "", str(exc)
+        return data_url, ""
+
+    def set_live_state(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = _payload_dict(payload)
+        with self._live_lock:
+            state = dict(self._live_state)
+            if "active" in data:
+                state["active"] = bool(data.get("active"))
+            status = str(data.get("status") or state.get("status") or "idle")
+            state["status"] = status if status in LIVE_STATUSES else "idle"
+            for key, limit in (("caption", 1200), ("user_text", 4000), ("assistant_text", 4000)):
+                if key in data:
+                    state[key] = str(data.get(key) or "")[:limit]
+            if "level" in data:
+                try:
+                    state["level"] = max(0.0, min(1.0, float(data.get("level") or 0.0)))
+                except (TypeError, ValueError):
+                    state["level"] = 0.0
+            for key in ("screen_mode", "frame_approved", "speech_output"):
+                if key in data:
+                    state[key] = bool(data.get(key))
+            self._live_state = state
+            return {"ok": True, "live_state": dict(state)}
+
+    def get_live_state(self) -> dict[str, Any]:
+        with self._live_lock:
+            return {
+                "ok": True,
+                "live_state": dict(self._live_state),
+                "command": dict(self._live_command),
+            }
+
+    def live_mini_action(self, action: str = "") -> dict[str, Any]:
+        clean = str(action or "").strip().lower()
+        if clean not in LIVE_MINI_ACTIONS:
+            return {"ok": False, "message": "Unknown Vision Live action."}
+        with self._live_lock:
+            seq = int(self._live_command.get("seq") or 0) + 1
+            self._live_command = {"seq": seq, "action": clean}
+        if clean == "stop":
+            self.stop_generation()
+        return {"ok": True, "command": dict(self._live_command)}
+
+    def open_live_mini(self) -> dict[str, Any]:
+        if self._live_mini_window is not None:
+            try:
+                self._live_mini_window.show()
+            except Exception:
+                self._live_mini_window = None
+            else:
+                return {"ok": True, "message": "Vision Live mini is already open."}
+        if not self._live_mini_url:
+            return {"ok": False, "message": "The floating Vision Live window is available in the desktop app."}
+        try:
+            import webview
+
+            mini = webview.create_window(
+                "VISION Live",
+                url=self._live_mini_url,
+                js_api=self,
+                width=320,
+                height=400,
+                min_size=(240, 260),
+                frameless=True,
+                easy_drag=True,
+                on_top=True,
+                resizable=True,
+                background_color="#0B0D10",
+                text_select=False,
+            )
+            if mini is None:
+                return {"ok": False, "message": "VISION could not open the floating Live window."}
+            self._live_mini_window = mini
+            try:
+                mini.events.closed += lambda: setattr(self, "_live_mini_window", None)
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Could not open the Vision Live mini window")
+            return {"ok": False, "message": "VISION could not open the floating Live window."}
+        return {"ok": True, "message": "Vision Live mini opened."}
+
+    def close_live_mini(self) -> dict[str, Any]:
+        mini = self._live_mini_window
+        self._live_mini_window = None
+        if mini is not None:
+            def destroy() -> None:
+                try:
+                    mini.destroy()
+                except Exception:
+                    pass
+
+            timer = threading.Timer(0.05, destroy)
+            timer.daemon = True
+            timer.start()
+        return {"ok": True}
+
     def _paths_payload(self, *, detailed: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "app_data": str(self.paths.app_data),
@@ -821,6 +1068,7 @@ class VisionWebApi:
             "hardware": self._hardware_payload(),
             "library_count": self.library.count() if self.library is not None else 0,
             "updates": self._updates_payload(),
+            "live": self._live_capabilities(),
             "chat_busy": self._chat_busy,
         }
 
@@ -1573,6 +1821,11 @@ class VisionWebApi:
                         self.library.record_use(library_item_id, conversation_id)
                     except Exception:
                         logger.exception("Could not record Item Library usage")
+        image_data_url = ""
+        if not regenerate:
+            image_data_url, frame_error = self._validated_live_frame(payload)
+            if frame_error:
+                raise RuntimeError(frame_error)
         return {
             "conversation_id": conversation_id,
             "user_text": final_text,
@@ -1580,6 +1833,7 @@ class VisionWebApi:
             "system_context": "\n\n".join(context_blocks),
             "pre_sources": sources,
             "agent_mode": bool(payload.get("agent_mode")) and not regenerate,
+            "image_data_url": image_data_url,
         }
 
     def _begin_chat(self, payload: dict[str, Any], regenerate: bool) -> dict[str, Any]:
@@ -1606,7 +1860,12 @@ class VisionWebApi:
         return {"accepted": True}
 
     def send_message(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._begin_chat(_payload_dict(payload), False)
+        data = _payload_dict(payload)
+        if data.get("live_image_data_url"):
+            _frame, frame_error = self._validated_live_frame(data)
+            if frame_error:
+                return {"accepted": False, "message": frame_error}
+        return self._begin_chat(data, False)
 
     def regenerate(self, conversation_id: str = "") -> dict[str, Any]:
         return self._begin_chat({"conversation_id": conversation_id}, True)
@@ -1759,6 +2018,7 @@ class VisionWebApi:
             "telemetry": self._telemetry_payload(),
             "available_models": self._available_models(),
             "hardware": self._hardware_payload(),
+            "live": self._live_capabilities(),
         }
 
     @staticmethod
@@ -1902,7 +2162,7 @@ class VisionWebApi:
             "enabled_mcp_servers", "enabled_connectors", "active_project_id",
             "updates_auto_check", "update_channel",
             "tts_voice_uri", "tts_voice_name", "tts_style", "tts_rate", "tts_pitch", "tts_volume",
-            "tts_auto_read", "reduce_motion",
+            "tts_auto_read", "stt_model_size", "stt_language", "mmproj_path", "reduce_motion",
         }
         current = self.config.model_dump(mode="json")
         updated = dict(current)
@@ -1919,7 +2179,7 @@ class VisionWebApi:
                 continue
             updated[key] = payload[key]
         validated = AppConfig.model_validate(updated)
-        restart_relevant = {"local_port", "context_size", "gpu_layers", "performance_profile", "model_path", "llama_server_path"}
+        restart_relevant = {"local_port", "context_size", "gpu_layers", "performance_profile", "model_path", "llama_server_path", "mmproj_path"}
         restart_needed = any(getattr(validated, key) != getattr(self.config, key) for key in restart_relevant)
         for key, value in validated.model_dump(mode="python").items():
             setattr(self.config, key, value)
@@ -3161,6 +3421,14 @@ class VisionWebApi:
                     logger.exception("Web bridge shutdown step failed: %s", name)
 
             step("flush streamed output", self._flush_stream)
+
+            def close_live_mini_window() -> None:
+                mini = self._live_mini_window
+                self._live_mini_window = None
+                if mini is not None:
+                    mini.destroy()
+
+            step("close Vision Live mini", close_live_mini_window)
             step("stop generation", self.stop_generation)
 
             def deny_pending_confirmations() -> None:
@@ -3194,6 +3462,7 @@ def run_web_app(services: SimpleNamespace | None = None, *, web_dir: str | Path 
 
     root = find_web_dir(web_dir)
     bridge = VisionWebApi(services)
+    bridge._live_mini_url = (root / "index.html").resolve().as_uri() + "?liveMini=1"
     # WebView developer tools are a source/debug escape hatch. They are never
     # enabled in the packaged release, even if --debug was supplied.
     effective_debug = bool(debug and not getattr(sys, "frozen", False))

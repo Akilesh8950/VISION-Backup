@@ -884,3 +884,70 @@ consistent 120–140 ms hover/press feedback.  Three calm modes compose:
 OS `prefers-reduced-motion`, **Low-end CPU** perf mode (blur removed,
 entrance animations skipped, slower spinner), and a manual **Reduce
 animations** toggle (Settings → General, `reduce_motion` in config).
+
+## 18. Vision Live: local push-to-talk voice and gated screen frames
+
+Vision Live adds two user-requested modes without changing the frozen
+text-model contract or adding a model-callable capture tool:
+
+1. **Voice Live** — the user holds push-to-talk, local whisper.cpp
+   transcribes the clip, the transcript enters the normal chat controller,
+   and the final answer is read with the existing soothing TTS policy while
+   translucent captions and a circular state meter update.
+2. **Voice + Screen Live** — the same flow plus one explicitly captured,
+   previewed, and approved primary-display frame.  It is read-only context
+   for one turn only; there is no continuous screen stream and no mouse,
+   keyboard, or computer-control capability.
+
+### 18.1 Local speech-to-text
+
+`vision_app.live.speech_to_text` uses the official whisper.cpp `v1.8.4`
+Windows x64 `whisper-cli` and GGML Whisper Tiny/Base/Small models from the
+official `ggerganov/whisper.cpp` Hugging Face repository.  Nothing is
+bundled or downloaded until the user clicks **Download local voice model**.
+The pinned archive and every model are SHA-256 verified; downloads reuse
+the resumable, offline-aware downloader and traversal-safe ZIP extraction.
+Files live under `%LOCALAPPDATA%\VISION\bin` and
+`%LOCALAPPDATA%\VISION\speech-to-text\models`.
+
+The WebView records only between press and release, decodes/resamples in
+memory to 16 kHz mono PCM16 WAV, and passes the clip to the bridge.  The
+backend validates the exact WAV shape/duration/non-silence, writes one
+temporary WAV because `whisper-cli` is file-based, runs it with bounded
+output/timeouts, and deletes that WAV in `finally` on every path.  Audio is
+never logged, persisted, telemetered, or sent to any cloud speech API.
+Browser/OS speech recognition is deliberately not used because its offline
+behaviour cannot be guaranteed.
+
+### 18.2 Screen-frame privacy boundary
+
+`vision_app.live.screen_capture` grabs one Pillow/ImageGrab still frame of
+the primary display, downscales/JPEG-encodes it only in memory, and returns
+it to the UI for preview.  The frame cannot join a turn unless the bridge
+re-validates JPEG/size, sees `live_screen_approved=true`, and sees a real
+vision capability.  The controller additionally forces the loopback local
+endpoint for image turns (not even a cloud health probe), marks history
+with text only, never writes image bytes to the database/disk, treats all
+on-screen content as untrusted data rather than instructions, and drops the
+frame after that turn.  Screen capture is not exposed as a model tool.
+
+Today's shipped `vision-ornith-1.5-9b-q4_k_m.gguf` repository contains no
+matching `mmproj`, so **screen understanding is honestly disabled** even
+though capture/preview works.  A future vision-capable VISION GGUF can set
+`mmproj_path` or place exactly one matching `*mmproj*.gguf` beside the model;
+`build_server_command` then appends `--mmproj`, and only then may the
+one-turn OpenAI `image_url` data-URI path activate.  With no projector, the
+frozen llama-server command remains exactly unchanged.  This reduces risk;
+it does not make any local application literally “100% safe.” Windows
+microphone permission, WebView2 `getUserMedia`, `whisper-cli.exe`,
+ImageGrab, multi-window behaviour, and a future real projector still require
+the Windows smoke test.
+
+### 18.3 Surfaces
+
+The main Live view and optional frameless always-on-top pywebview mini
+share the React bundle (`?liveMini=1`).  The bridge keeps only sanitized
+caption/status state and a monotonic mini-command sequence; no audio or
+image bytes enter that state.  The main window remains the sole owner of
+microphone capture, transcription submission, screen preview/approval, chat
+sending, and TTS.

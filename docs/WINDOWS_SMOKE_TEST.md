@@ -489,7 +489,39 @@ For a release candidate, use a disposable launcher-managed test install:
    pending until the next launch; apply a malformed remote config and confirm
    the bundled/cached prompt and tool schemas stay active.
 
-## 15. Minimum pass gate
+## 15. Vision Live (Windows-native checks)
+
+These paths cannot be proven on Linux and must be run on the packaged
+Windows build:
+
+1. Open **Settings → Voice → Vision Live**, choose **Base**, and click
+   **Download local voice model**. Confirm the one-time download completes,
+   survives an interrupted/resumed connection, and reports **Ready offline**.
+2. Disconnect from the internet. Open **Vision Live**, hold **Hold to talk**,
+   say a short question, and release. Confirm Windows asks for microphone
+   permission only as expected, the circular bars move while speaking, the
+   transcript is correct, VISION answers in chat, translucent captions update,
+   and the selected soothing voice reads the answer once.
+3. Confirm the microphone indicator/track stops immediately on release,
+   **Stop** cancels speech/generation, a silent or too-short clip gives a
+   helpful error, and no `.wav` remains under
+   `%LOCALAPPDATA%\VISION\speech-to-text` after success or failure.
+4. Click **Share screen frame** with today's text-only VISION model. Confirm
+   one primary-display preview appears, the UI says a future matching vision
+   projector is required, approval/send-as-image stays disabled, and no
+   screenshot file is written anywhere.
+5. Open **Floating mini**. Confirm it is frameless/always-on-top, mirrors the
+   orb and captions, can start/stop push-to-talk through the main window, and
+   its **Frame** action returns approval to the main Live preview. Confirm the
+   mini is hidden from its own captured frame and closes with the app.
+6. Only after a future vision-capable VISION GGUF **and its exact matching
+   mmproj** are published: set the projector in Settings → Model → Advanced,
+   restart the local model, preview/approve one frame, ask a question about
+   non-sensitive on-screen content, and confirm the answer describes that
+   frame. Repeat with the backup connection configured and the local server
+   stopped; the frame must refuse to send rather than fail over remotely.
+
+## 16. Minimum pass gate
 
 Do not call the Windows build release-ready unless all are true:
 
@@ -506,4 +538,7 @@ Do not call the Windows build release-ready unless all are true:
   the correct mode/paths in Settings;
 - the section 14.4 launcher staging, restart handoff, crash-loop rollback,
   model-next-launch, and malformed-config checks pass;
+- Vision Live offline push-to-talk, local transcription, captions/TTS,
+  one-frame preview gating, mini-window behaviour, and no-audio/no-screenshot
+  retention checks in section 15 pass;
 - no crash, secret leak, unconsented extension action or history loss occurs.

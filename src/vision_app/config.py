@@ -50,6 +50,14 @@ class AppConfig(BaseModel):
     tts_pitch: float = 0.95
     tts_volume: float = 1.0
     tts_auto_read: bool = False
+    # Vision Live (optional, local-first). Speech-to-text uses a
+    # user-downloaded whisper.cpp engine; screen understanding additionally
+    # needs a future vision-capable model build with a matching mmproj
+    # projector, which today's text-only GGUF does not ship.
+    stt_binary_path: str = ""
+    stt_model_size: str = "base"
+    stt_language: str = "auto"
+    mmproj_path: str = ""
     # Manual "Reduce animations" toggle (the UI also honours the OS-level
     # prefers-reduced-motion setting automatically).
     reduce_motion: bool = False
@@ -202,6 +210,23 @@ class AppConfig(BaseModel):
     @classmethod
     def _tts_voice_ids(cls, value: object) -> str:
         return str(value or "").strip()[:300]
+
+    @field_validator("stt_model_size", mode="before")
+    @classmethod
+    def _stt_model_size(cls, value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        return normalized if normalized in {"tiny", "base", "small"} else "base"
+
+    @field_validator("stt_language", mode="before")
+    @classmethod
+    def _stt_language(cls, value: object) -> str:
+        normalized = str(value or "").strip().lower().replace("_", "-")
+        if normalized == "auto":
+            return normalized
+        # Whisper accepts a two/three-letter language code. Anything else
+        # falls back to automatic detection instead of failing validation.
+        head = normalized.split("-", 1)[0]
+        return head if head.isalpha() and 2 <= len(head) <= 3 else "auto"
 
     @field_validator("update_channel", mode="before")
     @classmethod

@@ -6,6 +6,8 @@ import { Sidebar } from './Sidebar.jsx'
 import { systemStatusPayload } from './widgetData.js'
 import { demoConversations, demoLibrary, demoMessages, demoProjects, demoServer, demoUpdates } from './demo.js'
 import { DEFAULT_TTS, SAMPLE_TEXT, VOICE_STYLES, listVoices, loadVoices, normalizeTts, pickVoice, rankVoices, speechAvailable, styleGender, voiceEngine, voiceOptionLabel } from './voice.js'
+import { LivePanel } from './LivePanel.jsx'
+import { STT_LANGUAGE_OPTIONS, normalizeLiveCapabilities } from './live.js'
 
 const GenWidget = lazy(() => import('./widgets.jsx').then((module) => ({ default: module.GenWidget })))
 const LibraryPanel = lazy(() => import('./LibraryPanel.jsx'))
@@ -287,7 +289,7 @@ function MessageView({ message, handlers, latest = false, speaking = false }) {
 // reconciled again on each 30 ms stream flush.
 const Message = memo(MessageView)
 
-const Composer = memo(function Composer({ value, setValue, onSubmit, streaming, attachments, removeAttachment, chooseAttachments, endpoint, inputRef, hero = false, placeholder = '', agentMode = false, onToggleAgent = null }) {
+const Composer = memo(function Composer({ value, setValue, onSubmit, streaming, attachments, removeAttachment, chooseAttachments, endpoint, inputRef, hero = false, placeholder = '', agentMode = false, onToggleAgent = null, onOpenLive = null }) {
   const areaRef = useRef(null)
   useEffect(() => {
     const node = areaRef.current
@@ -314,6 +316,7 @@ const Composer = memo(function Composer({ value, setValue, onSubmit, streaming, 
         />
         <div className="composer-row">
           <button type="button" className="attach-btn" title="Attach text files" aria-label="Attach text files" disabled={streaming} onClick={chooseAttachments}><Icon name="plus" size={18} /></button>
+          {onOpenLive ? <button type="button" className="attach-btn live-composer-btn" title="Open Vision Live voice chat" aria-label="Open Vision Live" onClick={onOpenLive}><Icon name="live" size={17} /></button> : null}
           <span className="model-chip" title={endpoint.label || endpoint.kind}><span className={`dot ${endpoint.cloud ? 'warn' : 'healthy'}`} />{endpoint.cloud ? 'CLOUD' : 'LOCAL'}</span>
           {onToggleAgent ? (
             <span className="mode-toggle" role="group" aria-label="Response mode">
@@ -514,6 +517,8 @@ export default function App() {
   const [ttsPrefs, setTtsPrefs] = useState(() => normalizeTts(storageJson('vision.tts', DEFAULT_TTS)))
   const [ttsVoices, setTtsVoices] = useState(() => listVoices())
   const [speakingKey, setSpeakingKey] = useState(null)
+  const [liveOpen, setLiveOpen] = useState(false)
+  const [liveCapabilities, setLiveCapabilities] = useState(() => normalizeLiveCapabilities(null, false))
   const [reduceMotion, setReduceMotion] = useState(() => storageGet('vision.reduceMotion') === '1')
   // At or below 900px the sidebar becomes the icon rail regardless of the
   // stored preference, so snapped and very small windows stay usable.
@@ -534,6 +539,7 @@ export default function App() {
   const ttsPrefsRef = useRef(ttsPrefs)
   const speakingKeyRef = useRef(null)
   const autoSpokenKeyRef = useRef('')
+  const liveSpeechRef = useRef({ key: '', muted: false })
   const prevStreamingRef = useRef(false)
 
   const effectiveCollapsed = collapsed || narrow
@@ -584,6 +590,21 @@ export default function App() {
     if (result && result.accepted === false && result.message) pushToast(result.message, 'error')
     return result
   }, [pushToast])
+
+  const refreshLiveCapabilities = useCallback(async () => {
+    if (!nativeRef.current) {
+      setLiveCapabilities(normalizeLiveCapabilities(null, false))
+      return null
+    }
+    const result = await callOptional('get_live_capabilities', null)
+    if (result?.live) setLiveCapabilities(normalizeLiveCapabilities(result.live, true))
+    return result
+  }, [])
+
+  const openLive = useCallback(() => {
+    setLiveOpen(true)
+    refreshLiveCapabilities()
+  }, [refreshLiveCapabilities])
 
   const openExtEditor = useCallback(async (kind, item = null) => {
     if (item) {
@@ -644,6 +665,7 @@ export default function App() {
     if (!was || streaming || !ttsPrefsRef.current.tts_auto_read) return
     const last = [...messagesRef.current].reverse().find((m) => m.role === 'assistant' && !m.streaming && !m.incomplete)
     if (!last?.content || autoSpokenKeyRef.current === last.key) return
+    if (liveSpeechRef.current.key === last.key && liveSpeechRef.current.muted) { autoSpokenKeyRef.current = last.key; return }
     autoSpokenKeyRef.current = last.key
     voiceEngine.speak(extractThink(last.content).content || last.content, ttsPrefsRef.current, last.key)
   }, [streaming])
@@ -720,6 +742,7 @@ export default function App() {
     if (data.telemetry) setTelemetry((current) => ({ ...current, ...data.telemetry }))
     if (data.available_models) setAvailableModels(data.available_models)
     if (data.hardware) setHardware(data.hardware)
+    if (data.live) setLiveCapabilities(normalizeLiveCapabilities(data.live, nativeRef.current))
   }, [])
 
   const openSettings = useCallback(async (tab = 'general') => {
@@ -737,6 +760,7 @@ export default function App() {
       local_port: c.local_port ?? 8080, context_size: c.context_size ?? 16384, gpu_layers: c.gpu_layers ?? 99, performance_profile: c.performance_profile || 'auto',
       local_model_override: c.local_model_override || '', remote_base_url: '', remote_base_url_configured: Boolean(c.remote_base_url_configured), clear_remote_base_url: false, remote_model_override: c.remote_model_override || '',
       telemetry_opt_in: Boolean(c.telemetry_opt_in), updates_auto_check: c.updates_auto_check !== false, update_channel: c.update_channel || 'stable', enabled_skills: skillList.filter((s) => s.enabled).map((s) => s.name),
+      stt_model_size: c.stt_model_size || 'base', stt_language: c.stt_language || 'auto', mmproj_path: c.mmproj_path || '',
       remote_api_key: '', clear_remote_api_key: false, hf_token: '', clear_hf_token: false,
       // Fall back to the live prefs so preview/gallery mode (no backend
       // config) still shows and edits the real current voice settings.
@@ -945,16 +969,20 @@ export default function App() {
     })
   }, [updateAssistant])
 
-  const sendText = useCallback(async (raw) => {
+  const sendText = useCallback(async (raw, options = {}) => {
     const text = String(raw || '').trim()
-    if (!text || streamingRef.current) return
+    if (!text || streamingRef.current) return null
     const command = text.toLowerCase()
-    if (command === '/settings') { setDraft(''); openSettings(); return }
-    if (command === '/server') { setDraft(''); openServer(); return }
-    if (command === '/activity') { setDraft(''); openActivity(); return }
-    if (command === '/new') { setDraft(''); newChat(); return }
-    if (command === '/help') { setDraft(''); setOverlay('palette'); return }
-    if (command === '/agent') { setDraft(''); toggleAgentMode(!agentModeRef.current); pushToast(agentModeRef.current ? 'Agent mode on — VISION will plan and work step by step.' : 'Agent mode off.'); return }
+    // UI slash shortcuts are for typed composer input. A spoken transcript
+    // is always treated as a message (backend /fix and /teach still work).
+    if (!options.fromLive) {
+      if (command === '/settings') { setDraft(''); openSettings(); return null }
+      if (command === '/server') { setDraft(''); openServer(); return null }
+      if (command === '/activity') { setDraft(''); openActivity(); return null }
+      if (command === '/new') { setDraft(''); newChat(); return null }
+      if (command === '/help') { setDraft(''); setOverlay('palette'); return null }
+      if (command === '/agent') { setDraft(''); toggleAgentMode(!agentModeRef.current); pushToast(agentModeRef.current ? 'Agent mode on — VISION will plan and work step by step.' : 'Agent mode off.'); return null }
+    }
 
     const firstExchange = !messagesRef.current.some((item) => item.role === 'user')
     const assistantKey = uid(); assistantKeyRef.current = assistantKey
@@ -962,16 +990,27 @@ export default function App() {
       { key: uid(), role: 'user', content: text, tools: [] },
       { key: assistantKey, role: 'assistant', content: '', reasoning: '', tools: [], sources: [], streaming: true }])
     setSources([]); setDraft(''); setStreaming(true); stickRef.current = true
-    if (!nativeRef.current) { simulatePreview(text, firstExchange); setAttachments([]); return }
+    if (!nativeRef.current) { simulatePreview(text, firstExchange); setAttachments([]); return assistantKey }
     const attachmentIds = attachments.map((item) => item.id)
-    const result = await callApi('send_message', { text, conversation_id: currentIdRef.current || '', project_id: selectedProject || '', attachment_ids: attachmentIds, agent_mode: agentModeRef.current })
+    const payload = { text, conversation_id: currentIdRef.current || '', project_id: selectedProject || '', attachment_ids: attachmentIds, agent_mode: agentModeRef.current }
+    if (options.imageDataUrl) {
+      payload.live_image_data_url = options.imageDataUrl
+      payload.live_screen_approved = true
+    }
+    const result = await callApi('send_message', payload)
     if (!result?.accepted) {
       setStreaming(false)
       updateAssistant((m) => ({ ...m, streaming: false, incomplete: true, content: result?.message || 'The message could not be started.' }))
-      return
+      return null
     }
     setAttachments([])
+    return assistantKey
   }, [attachments, callApi, newChat, openActivity, openServer, openSettings, selectedProject, simulatePreview, updateAssistant])
+
+  const sendLiveText = useCallback(
+    (text, liveOptions = {}) => sendText(text, { ...liveOptions, fromLive: true }),
+    [sendText],
+  )
 
   const regenerate = useCallback(async () => {
     if (!nativeRef.current || streamingRef.current || !currentIdRef.current) return
@@ -1226,6 +1265,7 @@ export default function App() {
     const result = payload.result || {}
     if (result.updates) setUpdates(result.updates)
     if (result.telemetry) setTelemetry(result.telemetry)
+    if (result.live) setLiveCapabilities(normalizeLiveCapabilities(result.live, nativeRef.current))
     if (payload.name === 'upload_feedback' && result.ok === false) {
       pushToast(result.message || 'Feedback upload failed; the local queue was retained.', 'error')
       return
@@ -1306,6 +1346,7 @@ export default function App() {
       on('skill_used', (p) => updateAssistant((m) => ({ ...m, skills: [...new Set([...(m.skills || []), ...(p.names || [])])] }))),
       on('routing_updated', (p) => { if (p.routing) setExtensions((e) => ({ ...e, routing: p.routing })) }),
       on('updates_updated', (p) => { if (p.updates) setUpdates(p.updates) }),
+      on('live_updated', (p) => { if (p.live) setLiveCapabilities(normalizeLiveCapabilities(p.live, true)) }),
       on('update_progress', (p) => {
         if (p.updates) { setUpdates(p.updates); return }
         const channel = ['app', 'model', 'config'].includes(p.channel) ? p.channel : 'app'
@@ -1416,6 +1457,7 @@ export default function App() {
     { title: 'New chat', hint: 'Start fresh', icon: 'compose', run: newChat },
     { title: 'Regenerate last response', hint: 'Ctrl+Enter', icon: 'refresh', run: regenerate },
     { title: 'Stop generation', hint: 'Esc', icon: 'stop', run: stopGeneration },
+    { title: 'Vision Live', hint: 'Push-to-talk voice chat and approved screen frames', icon: 'live', run: openLive },
     { title: 'Attach text files', hint: 'Native picker', icon: 'attach', run: chooseAttachments },
     { title: 'Export conversation', hint: 'Markdown', icon: 'download', run: () => currentId && callApi('export_conversation', currentId) },
     { title: 'Settings', hint: 'General', icon: 'sliders', run: () => openSettings('general') },
@@ -1431,7 +1473,7 @@ export default function App() {
     { title: 'Toggle sidebar', hint: 'Focus mode', icon: 'panel', run: toggleSidebar },
     { title: 'Show sources', hint: 'Citations', icon: 'book', run: () => setInspectorOpen(true) },
     ...conversations.map((row) => ({ title: row.title || 'New chat', hint: 'Open chat', icon: 'message', run: () => selectConversation(row.id) })),
-  ], [callApi, chooseAttachments, conversations, currentId, newChat, openActivity, openLibrary, openServer, openSettings, regenerate, selectConversation, stopGeneration, theme, toggleSidebar, toggleTheme])
+  ], [callApi, chooseAttachments, conversations, currentId, newChat, openActivity, openLibrary, openLive, openServer, openSettings, regenerate, selectConversation, stopGeneration, theme, toggleSidebar, toggleTheme])
 
   const filteredCommands = commands.filter((item) => !paletteQuery.trim() || `${item.title} ${item.hint}`.toLowerCase().includes(paletteQuery.trim().toLowerCase())).slice(0, 14)
 
@@ -1530,6 +1572,7 @@ export default function App() {
   const updateChannels = updates?.channels || {}
   const updatesBusy = Boolean(task && ['check_updates', 'download_update', 'apply_update', 'rollback_update'].includes(String(task.name || '')))
   const updateChangelog = updateChannels.app?.notes || ''
+  const liveCaps = normalizeLiveCapabilities(liveCapabilities, native)
 
   return (
     <div className={`app${(hardware?.effective_profile || config?.performance_profile) === 'low_end' ? ' perf-low' : ''}${reduceMotion ? ' motion-reduced' : ''}`}>
@@ -1543,6 +1586,7 @@ export default function App() {
           <span className="t-name">VISION</span><span className="t-chat">{currentTitle}</span>
         </div>
         <div className="title-actions">
+          <button type="button" className="live-title-btn" onClick={openLive} title="Open Vision Live voice chat"><Icon name="live" size={15} /><span>Live</span></button>
           <button type="button" className="server-pill" onClick={openServer} title="Open server console"><span className={`dot ${serverTone}`} />{gallery ? 'Gallery' : server.state || 'Server not checked'}</button>
           <div className="win-controls">
             <button type="button" className="win-btn" aria-label="Minimize" onClick={() => callOptional('window_minimize', { ok: false })}><Icon name="minus" size={15} /></button>
@@ -1599,7 +1643,7 @@ export default function App() {
                   <div className="hero-greet">{greeting()}</div>
                   <h1 className="hero-title">{updates.ui_strings?.hero_title || 'What can VISION do for you?'}</h1>
                   <p className="hero-sub">{updates.ui_strings?.hero_subtitle || 'A private local assistant for answers, files, live data and desktop actions — running on your machine first.'}</p>
-                  <Composer hero agentMode={agentMode} onToggleAgent={toggleAgentMode} value={draft} setValue={setDraft} onSubmit={handleComposerSubmit} streaming={streaming} attachments={attachments} removeAttachment={removeAttachment} chooseAttachments={chooseAttachments} endpoint={endpoint} inputRef={inputRef} placeholder={updates.ui_strings?.composer_placeholder || ''} />
+                  <Composer hero agentMode={agentMode} onToggleAgent={toggleAgentMode} onOpenLive={openLive} value={draft} setValue={setDraft} onSubmit={handleComposerSubmit} streaming={streaming} attachments={attachments} removeAttachment={removeAttachment} chooseAttachments={chooseAttachments} endpoint={endpoint} inputRef={inputRef} placeholder={updates.ui_strings?.composer_placeholder || ''} />
                   <div className="suggestions">
                     {[
                       ['cloud', 'Weather in Coimbatore', 'Live local forecast with sources', 'What is the weather in Coimbatore?'],
@@ -1620,7 +1664,7 @@ export default function App() {
           {showJump && !empty ? <button type="button" className="jump" onClick={() => { stickRef.current = true; scrollBottom(true) }}><Icon name="arrowDown" size={14} />Jump to latest</button> : null}
           {!empty ? (
             <section className="composer-dock">
-              <Composer agentMode={agentMode} onToggleAgent={toggleAgentMode} value={draft} setValue={setDraft} onSubmit={handleComposerSubmit} streaming={streaming} attachments={attachments} removeAttachment={removeAttachment} chooseAttachments={chooseAttachments} endpoint={endpoint} inputRef={inputRef} placeholder={updates.ui_strings?.composer_placeholder || ''} />
+              <Composer agentMode={agentMode} onToggleAgent={toggleAgentMode} onOpenLive={openLive} value={draft} setValue={setDraft} onSubmit={handleComposerSubmit} streaming={streaming} attachments={attachments} removeAttachment={removeAttachment} chooseAttachments={chooseAttachments} endpoint={endpoint} inputRef={inputRef} placeholder={updates.ui_strings?.composer_placeholder || ''} />
             </section>
           ) : null}
         </main>
@@ -1640,6 +1684,26 @@ export default function App() {
           )
         })}
       </aside>
+
+      <LivePanel
+        open={liveOpen}
+        onClose={() => setLiveOpen(false)}
+        onOpenRequest={() => setLiveOpen(true)}
+        native={native}
+        capabilities={liveCapabilities}
+        onRefreshCapabilities={refreshLiveCapabilities}
+        callApi={callApi}
+        pushToast={pushToast}
+        messages={messages}
+        streaming={streaming}
+        speakingKey={speakingKey}
+        ttsPrefs={ttsPrefs}
+        onSendLive={sendLiveText}
+        onLiveTurnStarted={(key, muted) => { liveSpeechRef.current = { key: String(key || ''), muted: Boolean(muted) } }}
+        onStopGeneration={stopGeneration}
+        onOpenVoiceSettings={() => openSettings('voice')}
+        task={task}
+      />
 
       {libraryOpen ? (
         <Suspense fallback={<div className="library-panel open library-loading"><span className="spinner" />Loading library…</div>}>
@@ -1694,6 +1758,28 @@ export default function App() {
                     <div className="field"><label>Volume</label><div className="range-row"><input type="range" aria-label="Voice volume" min="0" max="1" step="0.05" value={form.tts_volume} disabled={!speechAvailable()} onChange={(e) => setForm({ ...form, tts_volume: Number(e.target.value), tts_style: 'custom' })} /><span className="range-value">{`${Math.round(Number(form.tts_volume ?? 1) * 100)}%`}</span></div></div>
                     <label className="check-row"><input type="checkbox" checked={Boolean(form.tts_auto_read)} disabled={!speechAvailable()} onChange={(e) => setForm({ ...form, tts_auto_read: e.target.checked })} />Read each finished answer aloud automatically</label>
                   </div>
+                  <h4 style={{ marginTop: 22 }}>Vision Live</h4>
+                  <p className="section-copy">Talk instead of typing with strict push-to-talk. Speech-to-text runs locally after a one-time download; microphone audio is not saved or uploaded. Screen questions use one previewed, approved frame at a time and need a future vision-capable VISION model.</p>
+                  <StatusRows rows={[
+                    ['Voice chat', liveCaps.speech_to_text.available ? 'Ready offline' : liveCaps.speech_to_text.reason],
+                    ['Listening model', liveCaps.speech_to_text.model_downloaded ? liveCaps.speech_to_text.model_label : 'Not downloaded'],
+                    ['Voice + screen', liveCaps.screen_vision.available ? `Ready (${liveCaps.screen_vision.mmproj_name})` : liveCaps.screen_vision.reason],
+                    ['Screen privacy', 'One local frame, preview + approval, never saved or sent to a backup connection'],
+                  ]} />
+                  <div className="simple-stack" style={{ marginTop: 18 }}>
+                    <div className="field"><label>Speech-to-text model</label><select className="select" value={form.stt_model_size || 'base'} onChange={(e) => setForm({ ...form, stt_model_size: e.target.value })}>
+                      {liveCaps.speech_to_text.models.map((model) => <option key={model.size} value={model.size}>{model.label}</option>)}
+                    </select><small>Base is the best starting point. Tiny is faster on older CPUs; Small is slower but more accurate.</small></div>
+                    <div className="field"><label>Spoken language</label><select className="select" value={form.stt_language || 'auto'} onChange={(e) => setForm({ ...form, stt_language: e.target.value })}>
+                      {STT_LANGUAGE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select><small>Automatic detects the language from each clip. Language changes apply when you Save.</small></div>
+                  </div>
+                  <div className="action-row">
+                    <button type="button" className="btn primary" disabled={!native || task?.name === 'download_stt'} onClick={() => callApi('download_speech_to_text', { model_size: form.stt_model_size || 'base' })}><Icon name="download" size={15} /> Download local voice model</button>
+                    <button type="button" className="btn" onClick={() => { setOverlay(''); openLive() }}><Icon name="live" size={15} /> Open Vision Live</button>
+                    <button type="button" className="btn ghost" onClick={refreshLiveCapabilities}>Refresh status</button>
+                  </div>
+                  {task?.name === 'download_stt' ? <><p className="empty-note" style={{ marginTop: 12 }}>{task.message || 'Downloading…'}{task.percent != null ? ` ${task.percent}%` : ''}{task.total ? ` (${formatBytes(task.downloaded)} / ${formatBytes(task.total)})` : ''}</p>{task.percent != null ? <div className="progress-line"><i style={{ transform: `scaleX(${Math.max(0, Math.min(100, Number(task.percent) || 0)) / 100})` }} /></div> : null}</> : null}
                   <div className="action-row">
                     <button type="button" id="tts-test" className="btn primary" disabled={!speechAvailable()} onClick={() => voiceEngine.speak(SAMPLE_TEXT, normalizeTts(form), '__test__').then((status) => { if (status === 'unavailable') pushToast('Read aloud is not available in this window.', 'error'); else if (status === 'no-voices') pushToast('No speech voices are installed on this PC yet.', 'error') }).catch(() => pushToast('Read aloud is not available in this window.', 'error'))}>Hear a sample</button>
                     {speakingKey ? <button type="button" className="btn" onClick={() => voiceEngine.stop()}>Stop</button> : null}
@@ -1725,6 +1811,7 @@ export default function App() {
                   <TechnicalDetails label="Advanced model settings" rows={serverTechnicalRows(server)}>
                     <div className="form-grid technical-grid">
                       <div className="field full"><label>Model file</label><div className="field-row"><input className="input" value={form.model_path} onChange={(e) => setForm({ ...form, model_path: e.target.value })} /><button type="button" className="btn" onClick={() => pickInto('model', 'model_path')}>Browse</button></div></div>
+                      <div className="field full"><label>Vision projector (mmproj, future models)</label><div className="field-row"><input className="input" placeholder="Leave blank for today's text-only VISION model" value={form.mmproj_path || ''} onChange={(e) => setForm({ ...form, mmproj_path: e.target.value })} /><button type="button" className="btn" onClick={() => pickInto('model', 'mmproj_path')}>Browse</button></div><small>Only set this with the exact mmproj file published for a future vision-capable VISION GGUF. A mismatch can stop the local model from starting; leave it blank today.</small></div>
                       <div className="field full"><label>Runtime file</label><div className="field-row"><input className="input" value={form.llama_server_path} onChange={(e) => setForm({ ...form, llama_server_path: e.target.value })} /><button type="button" className="btn" onClick={() => pickInto('server', 'llama_server_path')}>Browse</button></div></div>
                       <div className="field"><label>Local port</label><input className="input" type="number" min="1" max="65535" value={form.local_port} onChange={(e) => setForm({ ...form, local_port: e.target.value })} /></div>
                       <div className="field"><label>Context size</label><input className="input" type="number" min="1024" max="262144" step="1024" value={form.context_size} onChange={(e) => setForm({ ...form, context_size: e.target.value })} /></div>

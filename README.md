@@ -225,6 +225,22 @@ the renderer. Secret and connection fields are write-only replacements.
   deduplication, thumbnails/type icons, rename/delete and used-in-chats counts
 - SQLite history and persistent memory keys
 
+### Vision Live
+
+- **Voice chat:** strict hold-to-talk microphone input, local offline
+  whisper.cpp speech-to-text after a user-clicked verified download, normal
+  VISION chat/tool turns, soothing read-aloud, a circular voice/state meter,
+  and translucent captions. Audio is never saved or uploaded.
+- **Voice + screen framework:** one primary-display frame can be captured,
+  previewed, approved, retaken, or removed. It is read-only, local-only, not
+  saved, and lasts one question. Today's shipped VISION GGUF is text-only
+  and has no matching mmproj, so screenshot understanding stays disabled
+  until a future vision-capable VISION model + projector are published; the
+  app never fakes seeing the screen.
+- **Floating mini:** an optional always-on-top Live window mirrors the orb
+  and captions with hold-to-talk, frame, and stop controls. Frame approval
+  always returns to the main window.
+
 ### Tools
 
 The original 27 built-ins cover live data, files/code, memory, generative UI

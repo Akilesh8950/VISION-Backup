@@ -11,6 +11,7 @@ from pathlib import Path
 from ..config import AppConfig
 from ..redaction import redact_text
 from .hardware import HardwareInfo, resolve_perf
+from .vision import resolve_mmproj
 
 LogCallback = Callable[[str], None]
 
@@ -31,10 +32,16 @@ def build_server_command(
         config.gpu_layers,
         hardware,
     )
+    # Optional future vision support: today's text-only GGUF ships no
+    # mmproj, so this is empty and the frozen command is unchanged.  A
+    # future vision-capable VISION build adds its matching projector.
+    mmproj = resolve_mmproj(config, model_path)
+    vision_args = ["--mmproj", str(mmproj)] if mmproj is not None else []
     return [
         str(binary),
         "-m",
         str(model_path),
+        *vision_args,
         "--host",
         "127.0.0.1",
         "--port",

@@ -440,3 +440,25 @@ groups persist across launches.
   **Settings → General → Reduce animations** (and the OS reduced-motion
   setting, and Low-end CPU performance mode) calm or remove animations
   app-wide; spinners keep signalling activity.
+
+## 19. Vision Live
+
+- **Entry points:** title-bar **Live**, the composer Live icon, the command
+  palette, and Settings → Voice → **Open Vision Live**.  The Live dialog is
+  usable at small window sizes and explains setup inline instead of failing
+  silently.
+- **Voice Live:** a large hold-to-talk control is the only microphone path.
+  The circular bar meter reacts to microphone level while listening, rotates
+  calmly while transcribing/thinking, and pulses while VISION speaks.  User
+  and VISION captions are translucent, blurred cards; spoken answers use the
+  saved Settings → Voice voice/style and can be muted with **Speak answers**.
+- **Voice + Screen Live:** **Share screen frame** captures exactly one
+  primary-display still.  The preview must be approved or removed before a
+  pending spoken question can send; retake replaces it.  Approval lasts one
+  question only.  When the installed model has no matching vision projector,
+  the UI says so plainly and the frame is never sent as an image.
+- **Floating mini:** an optional always-on-top compact window mirrors the
+  orb/captions and offers hold-to-talk, frame capture, and stop.  It cannot
+  approve a frame by itself; preview/approval stays in the main Live view.
+- **Safety copy is persistent:** microphone off until held, audio and frames
+  not saved, frames local-only, and no clicks/typing/computer control.

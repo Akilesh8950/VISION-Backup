@@ -13,4 +13,5 @@ PyYAML==6.0.3
 jsonschema==4.26.0
 pypdf==6.21.2
 python-docx==1.2.0
+Pillow==12.3.0
 pytest==9.1.1

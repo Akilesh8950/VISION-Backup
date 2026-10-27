@@ -24,9 +24,19 @@ class ChatMessage(BaseModel):
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
+    # Ephemeral Vision Live frame for the current turn only. It is never
+    # persisted (history stores plain text) and is only ever populated
+    # after the user previews and approves one captured screen frame for a
+    # genuinely vision-capable local model.
+    image_data_url: str = Field(default="", exclude=True)
 
     def to_wire(self) -> dict[str, Any]:
         data: dict[str, Any] = {"role": self.role, "content": self.content or ""}
+        if self.role == "user" and self.image_data_url:
+            data["content"] = [
+                {"type": "image_url", "image_url": {"url": self.image_data_url}},
+                {"type": "text", "text": self.content or ""},
+            ]
         if self.tool_calls:
             data["tool_calls"] = [call.model_dump(exclude_none=True) for call in self.tool_calls]
         if self.tool_call_id:

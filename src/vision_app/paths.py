@@ -46,6 +46,14 @@ class AppPaths:
         return self.app_data / "models"
 
     @property
+    def stt_dir(self) -> Path:
+        return self.app_data / "speech-to-text"
+
+    @property
+    def stt_models_dir(self) -> Path:
+        return self.stt_dir / "models"
+
+    @property
     def model_file(self) -> Path:
         return self.models_dir / GGUF_FILENAME
 
@@ -111,6 +119,7 @@ class AppPaths:
             self.workspace,
             self.logs_dir,
             self.models_dir,
+            self.stt_models_dir,
             self.bin_dir,
             self.telemetry_dir,
             self.extensions_dir,
