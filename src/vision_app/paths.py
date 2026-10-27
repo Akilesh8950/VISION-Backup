@@ -62,6 +62,14 @@ class AppPaths:
         return self.telemetry_dir / "needs.jsonl"
 
     @property
+    def telemetry_report(self) -> Path:
+        return self.telemetry_dir / "report.json"
+
+    @property
+    def telemetry_upload_status(self) -> Path:
+        return self.telemetry_dir / "upload-status.json"
+
+    @property
     def extensions_dir(self) -> Path:
         return self.app_data / "extensions"
 
@@ -72,6 +80,22 @@ class AppPaths:
     @property
     def checkpoints_dir(self) -> Path:
         return self.app_data / "checkpoints"
+
+    @property
+    def library_dir(self) -> Path:
+        return self.app_data / "library"
+
+    @property
+    def updates_dir(self) -> Path:
+        return self.app_data / "updates"
+
+    @property
+    def update_state_file(self) -> Path:
+        return self.updates_dir / "state.json"
+
+    @property
+    def remote_config_file(self) -> Path:
+        return self.updates_dir / "remote-config.json"
 
     @property
     def mcp_config(self) -> Path:
@@ -92,16 +116,38 @@ class AppPaths:
             self.extensions_dir,
             self.skills_dir,
             self.checkpoints_dir,
+            self.library_dir,
+            self.updates_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
+
+
+def frozen_install_root() -> Path | None:
+    """Return the outer launcher root for a frozen install, if any.
+
+    A self-updating install runs the real app from
+    ``versions/<version>/VISION.exe`` under a small outer launcher.  Update
+    and portable-data logic need that outer directory, not the versioned app
+    directory that will eventually be pruned.
+    """
+
+    if not getattr(sys, "frozen", False):
+        return None
+    exe_dir = Path(sys.executable).resolve().parent
+    if exe_dir.parent.name == "versions":
+        return exe_dir.parents[1]
+    return exe_dir
 
 
 def portable_install_root() -> Path | None:
     """Return the portable root when running a frozen portable install.
 
-    The Windows installer writes ``VISION.portable`` beside ``VISION.exe``
-    only for portable mode. Source/development launches deliberately ignore
-    the marker so tests and local runs keep their normal OS data locations.
+    The Windows installer writes ``VISION.portable`` beside the outer
+    ``VISION.exe`` only for portable mode. In a self-updating layout the
+    actual app executable is one level below ``versions``; accept the marker
+    at that outer launcher root as well. Source/development launches
+    deliberately ignore the marker so tests and local runs keep their normal
+    OS data locations.
     """
 
     if not getattr(sys, "frozen", False):
@@ -109,13 +155,14 @@ def portable_install_root() -> Path | None:
     exe_dir = Path(sys.executable).resolve().parent
     if (exe_dir / PORTABLE_MARKER_FILENAME).is_file():
         return exe_dir
+    outer = frozen_install_root()
+    if outer is not None and outer != exe_dir and (outer / PORTABLE_MARKER_FILENAME).is_file():
+        return outer
     return None
 
 
 def get_paths() -> AppPaths:
-    frozen_root = (
-        Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else None
-    )
+    frozen_root = frozen_install_root()
     override = os.environ.get("VISION_HOME")
     if override:
         root = Path(override).expanduser()

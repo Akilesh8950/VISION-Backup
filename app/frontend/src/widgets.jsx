@@ -1,7 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Chart, registerables } from 'chart.js'
 import { callOptional, isNative } from './bridge.js'
 import { Icon } from './icons.jsx'
+import { systemStatusPayload } from './widgetData.js'
+
+export { systemStatusPayload }
 
 Chart.register(...registerables)
 
@@ -15,7 +18,10 @@ function safeFilename(value, extension) {
   return `${stem}.${extension}`
 }
 function csvCell(value) {
-  const text = value == null ? '' : String(value)
+  let text = value == null ? '' : String(value)
+  // Treat model/tool output as untrusted spreadsheet input: a leading
+  // formula marker is forced to text before CSV quoting.
+  if (typeof value !== 'number' && /^[\s\u0000-\u0020]*[=+\-@]/.test(text)) text = `'${text}`
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 function toCsv(rows) { return rows.map((row) => row.map(csvCell).join(',')).join('\n') + '\n' }
@@ -296,7 +302,7 @@ function DiffWidget(payload) {
   )
 }
 
-export function GenWidget({ payload }) {
+function GenWidgetView({ payload }) {
   if (!payload || typeof payload !== 'object') return null
   switch (payload.kind) {
     case 'table': return <TableWidget {...payload} />
@@ -316,17 +322,4 @@ export function GenWidget({ payload }) {
   }
 }
 
-export function systemStatusPayload(result) {
-  const raw = result?.raw && typeof result.raw === 'object' ? result.raw : null
-  if (!raw || result?.name !== 'system_status') return null
-  const gpuDevices = Array.isArray(raw.gpu?.devices) ? raw.gpu.devices : []
-  const gpuText = gpuDevices.length ? gpuDevices.map((g) => `${g.name}: ${Math.round(g.vram_used_mb || 0)} / ${Math.round(g.vram_total_mb || 0)} MB VRAM`).join('\n') : 'No NVIDIA GPU telemetry available'
-  return {
-    kind: 'cards', title: 'System status', cards: [
-      { title: 'CPU', value: `${Number(raw.cpu_percent || 0).toFixed(1)}%`, body: `${raw.cpu_count || '—'} logical processors` },
-      { title: 'RAM', value: `${Number(raw.ram_percent || 0).toFixed(1)}%`, body: `${raw.ram_used_gb || 0} GB used of ${raw.ram_total_gb || 0} GB` },
-      { title: 'Disk', value: `${Number(raw.disk_used_percent || 0).toFixed(1)}%`, body: `${raw.disk_free_gb || 0} GB free of ${raw.disk_total_gb || 0} GB on ${raw.disk_root || ''}` },
-      { title: 'GPU', value: gpuDevices.length ? `${Number(gpuDevices[0].utilization_percent || 0).toFixed(0)}%` : '—', body: gpuText },
-    ],
-  }
-}
+export const GenWidget = memo(GenWidgetView)

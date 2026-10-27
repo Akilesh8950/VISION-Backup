@@ -16,3 +16,15 @@ src/vision_app/_build_info.py
 .smoke-data/
 node_modules/
 app/frontend/node_modules/
+
+# Local browser/test profiles and sandbox markers
+.config/
+.local/
+.pki/
+.sudo_as_admin_successful
+
+# Local generated previews/samples (regenerate with scripts/build_demo.py)
+/demo.html
+/screenshots.html
+/vision-soothing-voice-sample.mp3
+/result.json

@@ -33,6 +33,25 @@ def test_namespace_and_fingerprint_change():
     assert a != b
 
 
+def test_fake_mcp_discovery_caps_tool_count():
+    class ManyResult:
+        tools: ClassVar[list[dict]] = [
+            {"name": f"tool-{index}", "description": "Generated", "inputSchema": {"type": "object", "properties": {}}}
+            for index in range(300)
+        ]
+
+    class ManySession:
+        async def list_tools(self):
+            return ManyResult()
+
+    config = McpServerConfig(id="many", display_name="Many", transport="stdio", command="fake")
+    manager = McpClientManager()
+    manager.register_session(config, ManySession())
+    discovery = asyncio.run(manager.discover(config))
+    assert len(discovery["tools"]) == 256
+    assert "discovery limit" in manager.last_errors["many"]
+
+
 def test_fake_mcp_discovery_and_registry_call_requires_consent(tmp_path):
     config = McpServerConfig(id="fake", display_name="Fake", transport="stdio", command="fake")
     manager = McpClientManager()

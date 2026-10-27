@@ -20,9 +20,12 @@ That keeps the application, model, llama.cpp runtime, settings, history, logs, s
 
 ```text
 D:\VISION\
-  VISION.exe
+  VISION.exe              (stable update launcher)
   VISION.portable
-  _internal\
+  _internal\              (launcher support files)
+  current.json
+  downloads\
+  versions\<version>\VISION.exe
   data\
     models\
     bin\
@@ -54,6 +57,8 @@ D:\VISION\
 
 End users only need the finished `VISION-Setup-...exe`; skip to Part 2 if you already have it.
 
+> Optional folder helper: run `setup_helper\VISION-Create-Folders.exe`, choose a parent such as `D:\`, and it creates `D:\VISION-Source` and `D:\VISION`. Put source/build files only in `VISION-Source`; later choose `VISION` as Setup's installation folder. The helper only creates those folders—it does not download or install VISION.
+
 ### 1. Install build prerequisites
 
 Install:
@@ -61,7 +66,7 @@ Install:
 - Git
 - Python 3.11 x64 available as `python`
 - Inno Setup 6
-- Node.js only if you plan to rebuild the React frontend
+- Node.js 20.19+ (or 22.12+) only if you plan to rebuild the React frontend
 
 Install Inno Setup from an elevated or normal PowerShell terminal with WinGet:
 
@@ -93,10 +98,16 @@ The committed React production bundle is already in `app\web`, so the normal rel
 
 This will:
 
-1. Run `scripts\build.ps1` to build `dist\VISION\VISION.exe` with PyInstaller.
-2. Refuse to package a dirty `dist\VISION` that contains a `.gguf` model, `data`, `workspace`, or `VISION.portable`.
-3. Compile `installer\VISION.iss` with Inno Setup.
-4. Write the installer and its SHA-256 checksum to `dist\installer\`.
+1. Run `scripts\build.ps1` to build the actual app at `dist\VISION\VISION.exe` with PyInstaller `--onedir`, optimized compiled bytecode, and the minified, source-map-free React bundle.
+2. Refuse to package a dirty `dist\VISION` that contains a `.gguf` model, `data`, `workspace`, `VISION.portable`, frontend `.map` files, frontend JSX/TypeScript/package files, or a copied application source tree.
+3. Build the stable outer launcher and stage `dist\installer-payload` as `VISION.exe` + `current.json` + `versions\<version>\VISION.exe`, so later app updates can be applied by the launcher after VISION exits.
+4. Compile `installer\VISION.iss` with Inno Setup.
+5. Write the installer and its SHA-256 checksum to `dist\installer\`.
+
+The release payload avoids plaintext application source and never receives saved
+API secrets. Compiled/minified local code is harder to inspect but can still be
+reverse-engineered by a determined person with control of their PC; do not embed
+private owner/service secrets in the client.
 
 Expected output:
 
@@ -269,6 +280,8 @@ The ZIP has no uninstaller or automatic shortcuts. To remove it, close VISION an
    - `VISION.exe`
    - `VISION.portable`
    - `_internal\`
+   - `current.json`
+   - `versions\` (downloaded app versions; `downloads\` may be omitted from a backup)
    - `data\`
    - `workspace\`
 4. Paste/extract it at the new location.
@@ -281,6 +294,20 @@ Projects, code-workspace roots, MCP server commands, or connector paths that ref
 For a smaller backup, you may omit `data\models\*.gguf`, but VISION will need to download the model again after restore.
 
 ## Updating
+
+### Normal in-app updates
+
+Open **Settings → Updates**. VISION separately checks:
+
+- **App** — downloads and hash-verifies in the background, then waits. It is applied only when you click **Restart to apply**; the outer launcher switches versions after VISION exits and keeps the previous version for rollback.
+- **Model** — downloads to a pending location and activates on the next launch, never during a conversation.
+- **Config** — validated prompt/tool-schema/UI-string changes can apply immediately; malformed remote config is rejected.
+
+Leave **Automatically check for updates** on unless you want manual checks only. Offline checks fail quietly and keep the last-known status.
+
+### Setup/manual updates
+
+Use this if Setup reports that a newer launcher is required, or if you prefer a manual reinstall:
 
 1. Close VISION.
 2. Run the newer `VISION-Setup-...exe`.
@@ -360,7 +387,7 @@ Free space or choose another SSD. For local use, keep at least 12 GiB free on th
 
 ### A blank window opens or the interface does not load
 
-Install/repair Microsoft Edge WebView2 Runtime, then relaunch VISION. Also confirm no security software quarantined files under `_internal\app\web`.
+Install/repair Microsoft Edge WebView2 Runtime, then relaunch VISION. Also confirm no security software quarantined files under `versions\<version>\_internal\app\web`.
 
 ### VISION used `%LOCALAPPDATA%` even though I expected portable data
 

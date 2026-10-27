@@ -42,6 +42,22 @@ def test_validation_error_is_corrective(tmp_path):
     assert result.is_validation_error
     assert result.error_kind == "tool_schema_error"
     assert "correct the arguments" in result.content_for_model
+    assert result.raw_arguments == json.dumps({"city": "Coimbatore", "units": "celsius"})
+    assert result.validation_error
+
+
+def test_runtime_error_captures_traceback_for_telemetry(tmp_path):
+    from dataclasses import replace
+
+    registry = ToolRegistry()
+    original = registry.definitions["get_weather"]
+    registry.definitions["get_weather"] = replace(
+        original,
+        handler=lambda _args, _context: 1 / 0,
+    )
+    result = asyncio.run(registry.execute(call("get_weather", {"city": "Coimbatore"}), make_context(tmp_path)))
+    assert result.error_kind == "tool_runtime_error"
+    assert "ZeroDivisionError" in result.traceback_text
 
 
 def test_unknown_tool_blocked(tmp_path):

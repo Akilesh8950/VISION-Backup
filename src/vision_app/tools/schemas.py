@@ -1,12 +1,39 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+def validate_http_url(value: str) -> str:
+    clean = str(value).strip()
+    if not clean or any(ord(character) <= 32 for character in clean):
+        raise ValueError("URL must not contain whitespace or control characters")
+    parsed = urlparse(clean)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("only http:// and https:// URLs are allowed")
+    try:
+        _port = parsed.port
+    except ValueError as exc:
+        raise ValueError("URL port is invalid") from exc
+    if not parsed.hostname:
+        raise ValueError("URL must include a host")
+    return clean
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_nul_in_path_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key in ("path", "directory"):
+                value = data.get(key)
+                if isinstance(value, str) and "\x00" in value:
+                    raise ValueError(f"{key} must not contain a NUL character")
+        return data
 
 
 class EmptyArgs(StrictModel):
@@ -21,10 +48,6 @@ class WebSearchArgs(StrictModel):
 class GetNewsArgs(StrictModel):
     topic: str = Field(min_length=1, max_length=300)
     limit: int = Field(default=5, ge=1, le=20)
-
-
-class WeatherUnits(str):
-    pass
 
 
 class GetWeatherArgs(StrictModel):
@@ -77,12 +100,14 @@ class MemorySetArgs(StrictModel):
     value: str = Field(max_length=10_000)
 
 
-Cell = str | int | float | bool | None
+ShortText = Annotated[str, Field(max_length=2_000)]
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+Cell = ShortText | int | FiniteFloat | bool | None
 
 
 class UiTableArgs(StrictModel):
     title: str = Field(min_length=1, max_length=300)
-    columns: list[str] = Field(min_length=1, max_length=12)
+    columns: list[ShortText] = Field(min_length=1, max_length=12)
     rows: list[list[Cell]] = Field(max_length=200)
 
     @model_validator(mode="after")
@@ -96,8 +121,8 @@ class UiTableArgs(StrictModel):
 class UiChartArgs(StrictModel):
     title: str = Field(min_length=1, max_length=300)
     chart_type: Literal["bar", "line", "pie", "scatter"]
-    labels: list[str] = Field(min_length=1, max_length=200)
-    values: list[float] = Field(min_length=1, max_length=200)
+    labels: list[ShortText] = Field(min_length=1, max_length=200)
+    values: list[FiniteFloat] = Field(min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def _length_and_ranges(self) -> UiChartArgs:
@@ -105,6 +130,8 @@ class UiChartArgs(StrictModel):
             raise ValueError("labels and values must have the same length")
         if self.chart_type == "pie" and any(value < 0 for value in self.values):
             raise ValueError("pie values must be non-negative")
+        if self.chart_type == "pie" and sum(self.values) <= 0:
+            raise ValueError("pie values must sum to more than zero")
         return self
 
 
@@ -155,9 +182,7 @@ class OpenUrlArgs(StrictModel):
     @field_validator("url")
     @classmethod
     def _http_only(cls, value: str) -> str:
-        if not value.lower().startswith(("http://", "https://")):
-            raise ValueError("only http:// and https:// URLs are allowed")
-        return value
+        return validate_http_url(value)
 
 
 class ClipboardSetArgs(StrictModel):
@@ -165,7 +190,7 @@ class ClipboardSetArgs(StrictModel):
 
 
 class SetTimerArgs(StrictModel):
-    minutes: float = Field(gt=0, le=1440)
+    minutes: float = Field(gt=0, le=1440, allow_inf_nan=False)
     label: str = Field(min_length=1, max_length=300)
 
 
@@ -176,13 +201,16 @@ class ReadUrlArgs(StrictModel):
     @field_validator("url")
     @classmethod
     def _http_only(cls, value: str) -> str:
-        if not value.lower().startswith(("http://", "https://")):
-            raise ValueError("only http:// and https:// URLs are allowed")
-        return value
+        return validate_http_url(value)
 
 
 class SkillLoadArgs(StrictModel):
     name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+class ReadSkillFileArgs(StrictModel):
+    skill: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    path: str = Field(min_length=1, max_length=300)
 
 
 ORIGINAL_27_TOOLS = [
@@ -224,6 +252,7 @@ TOOL_MODELS: dict[str, type[BaseModel]] = {
     "set_timer": SetTimerArgs,
     "read_url": ReadUrlArgs,
     "skill_load": SkillLoadArgs,
+    "read_skill_file": ReadSkillFileArgs,
 }
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
@@ -256,6 +285,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "set_timer": "Set an in-app timer while VISION is running.",
     "read_url": "Fetch and extract readable text from a public HTTP/HTTPS page for citation.",
     "skill_load": "Load the full instructions for an enabled portable skill by name.",
+    "read_skill_file": "Read a text file bundled inside a skill folder, e.g. skill=weekly-report, path=references/format.md. Restricted to that skill's folder.",
 }
 
 

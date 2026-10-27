@@ -57,8 +57,9 @@ def test_bridge_state_settings_and_secret_redaction(tmp_path):
     assert state["paths"]["app_data"] == settings["paths"]["app_data"]
     assert "remote-secret-value" not in encoded
     assert "hf-secret-value" not in encoded
-    tool_names = {item["name"] for item in state["tools"]}
-    assert {"get_weather", "system_status", "read_url", "ui_chart"}.issubset(tool_names)
+    # The renderer does not need (and must not receive) the backend tool
+    # inventory in initial state.
+    assert "tools" not in state
 
 
 def test_bridge_conversation_crud_and_confirmation_default_deny(tmp_path):
@@ -138,7 +139,8 @@ def test_react_frontend_build_is_local_flat_and_complete():
         "node_modules/react-dom": "19.3.1",
         "node_modules/chart.js": "4.6.1",
         "node_modules/@kurkle/color": "0.3.4",
-        "node_modules/vite": "5.4.19",
+        "node_modules/vite": "8.3.5",
+        "node_modules/@vitejs/plugin-react": "6.1.2",
     }.items():
         assert lock["packages"][package_path]["version"] == version
 

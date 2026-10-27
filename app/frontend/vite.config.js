@@ -11,6 +11,9 @@ export default defineConfig({
     outDir: webDir,
     emptyOutDir: true,
     assetsDir: 'assets',
+    // Release bundles are minified and deliberately have no source maps.
+    minify: true,
+    cssMinify: true,
     sourcemap: false,
     chunkSizeWarningLimit: 900,
   },

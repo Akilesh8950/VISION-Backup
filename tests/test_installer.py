@@ -39,6 +39,29 @@ def test_frozen_portable_marker_keeps_data_and_workspace_beside_exe(
     assert paths.is_portable is True
 
 
+def test_frozen_versioned_launcher_portable_root_is_outer_folder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    outer = tmp_path / "VISION"
+    version_dir = outer / "versions" / "1.0.0"
+    version_dir.mkdir(parents=True)
+    exe = version_dir / "VISION.exe"
+    exe.write_bytes(b"app")
+    (outer / "VISION.exe").write_bytes(b"launcher")
+    (outer / paths_module.PORTABLE_MARKER_FILENAME).write_text("portable", encoding="utf-8")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    monkeypatch.delenv("VISION_HOME", raising=False)
+
+    paths = paths_module.get_paths()
+
+    assert paths_module.portable_install_root() == outer.resolve()
+    assert paths.installation_root == outer.resolve()
+    assert paths.app_data == outer.resolve() / "data"
+    assert paths.workspace == outer.resolve() / "workspace"
+    assert paths.updates_dir == outer.resolve() / "data" / "updates"
+
+
 def test_vision_home_still_overrides_portable_marker(tmp_path: Path, monkeypatch) -> None:
     install_dir = tmp_path / "portable"
     _freeze_at(monkeypatch, install_dir)
@@ -90,6 +113,12 @@ def test_inno_setup_offers_scope_portable_mode_and_optimized_compression() -> No
     assert '{app}\\data' in script
     assert '{app}\\workspace' in script
     assert 'Excludes: "data\\*,workspace\\*,*.gguf' in script
+    assert "dist\\installer-payload" in script
+    assert "CurStepChanged" in script
+    assert "ReadExistingCurrentVersion" in script
+    assert 'Name: "{app}\\versions"' in script
+    assert 'Name: "{app}\\downloads"' in script
+    assert 'Type: filesandordirs; Name: "{app}\\versions"' in script
     assert "GetSpaceOnDisk64" in script
     assert "F3017226-FE2A-4295-8BDF-00C3A9A7E4C5" in script
     assert "runasoriginaluser" in script
@@ -105,6 +134,10 @@ def test_installer_build_wrapper_produces_checksums_and_refuses_dirty_dist() -> 
     assert "*.gguf" in script
     assert "VISION.portable" in script
     assert "Compress-Archive" in script
+    assert "launcher_stub.py" in script
+    assert 'versions\\$Version' in script
+    assert '"current.json"' in script
+    assert '/DDistDir=$PayloadDir' in script
     assert "VISION-Setup-$Version-x64.exe" in script
 
 

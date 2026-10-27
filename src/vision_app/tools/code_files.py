@@ -5,12 +5,18 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
+from ..python_helper import RUN_PYTHON_HELPER_ARG
+from ..subprocess_utils import run_bounded
 from . import schemas
 from .context import ToolContext
 
 MAX_FILE_BYTES = 1_000_000
+MAX_LIST_SCAN = 5_000
+MAX_SEARCH_BYTES = 25_000_000
+SEARCH_TIME_LIMIT_SECONDS = 10.0
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build", ".mypy_cache", ".pytest_cache"}
 
 
@@ -32,12 +38,27 @@ def _is_binary(data: bytes) -> bool:
 
 
 def read_file(args: schemas.ReadFileArgs, context: ToolContext) -> dict:
+    raw_path = str(args.path or "")
+    if raw_path.startswith("skill://"):
+        # Bundled skill resource: read-only, confined to the skill folder by
+        # SkillManager.read_resource. Path form: skill://<name>/<relative>.
+        if context.skill_resource_reader is None:
+            raise RuntimeError("Skill resources are not available")
+        remainder = raw_path[len("skill://"):]
+        name, separator, relative = remainder.partition("/")
+        if not name or not separator or not relative:
+            raise RuntimeError("Skill resource path must look like skill://<name>/<file>")
+        content = context.skill_resource_reader(name, relative)
+        return {"path": raw_path, "content": content}
     path = _confirmed_path(context, args.path, "read")
     if not path.is_file():
         raise FileNotFoundError(f"File not found: {path}")
     if path.stat().st_size > MAX_FILE_BYTES:
         raise RuntimeError("File exceeds the 1 MB text read limit")
-    data = path.read_bytes()
+    with path.open("rb") as stream:
+        data = stream.read(MAX_FILE_BYTES + 1)
+    if len(data) > MAX_FILE_BYTES:
+        raise RuntimeError("File exceeds the 1 MB text read limit")
     if _is_binary(data):
         raise RuntimeError("Binary files cannot be read as text")
     return {"path": str(path), "content": data.decode("utf-8", errors="strict")}
@@ -69,15 +90,31 @@ def list_files(args: schemas.ListFilesArgs, context: ToolContext) -> dict:
     path = _confirmed_path(context, args.directory, "read")
     if not path.is_dir():
         raise NotADirectoryError(f"Directory not found: {path}")
-    entries = []
-    for child in sorted(path.iterdir(), key=lambda value: (not value.is_dir(), value.name.lower()))[:200]:
-        try:
-            stat = child.stat()
-            size = stat.st_size if child.is_file() else None
-        except OSError:
-            size = None
-        entries.append({"name": child.name, "path": str(child), "type": "directory" if child.is_dir() else "file", "size": size})
-    return {"directory": str(path), "entries": entries, "truncated": len(entries) == 200}
+    scanned: list[tuple[str, str, bool, int | None]] = []
+    scan_truncated = False
+    with os.scandir(path) as iterator:
+        for entry in iterator:
+            if len(scanned) >= MAX_LIST_SCAN:
+                scan_truncated = True
+                break
+            try:
+                is_directory = entry.is_dir(follow_symlinks=True)
+                size = entry.stat(follow_symlinks=True).st_size if entry.is_file(follow_symlinks=True) else None
+            except OSError:
+                is_directory = False
+                size = None
+            scanned.append((entry.name, entry.path, is_directory, size))
+    scanned.sort(key=lambda value: (not value[2], value[0].lower()))
+    entries = [
+        {"name": name, "path": child_path, "type": "directory" if is_directory else "file", "size": size}
+        for name, child_path, is_directory, size in scanned[:200]
+    ]
+    return {
+        "directory": str(path),
+        "entries": entries,
+        "truncated": scan_truncated or len(scanned) > len(entries),
+        "scanned": len(scanned),
+    }
 
 
 def search_code(args: schemas.SearchCodeArgs, context: ToolContext) -> dict:
@@ -87,38 +124,78 @@ def search_code(args: schemas.SearchCodeArgs, context: ToolContext) -> dict:
     except re.error as exc:
         raise RuntimeError(f"Invalid regular expression: {exc}") from exc
     files: list[Path]
+    scan_truncated = False
     if root.is_file():
         files = [root]
     elif root.is_dir():
         files = []
         for current, dirs, names in os.walk(root):
-            dirs[:] = sorted(name for name in dirs if name not in SKIP_DIRS)
+            current_path = Path(current)
+            dirs[:] = sorted(
+                name for name in dirs
+                if name not in SKIP_DIRS and not (current_path / name).is_symlink()
+            )
             for name in sorted(names):
-                files.append(Path(current) / name)
+                candidate = current_path / name
+                try:
+                    resolved = candidate.resolve(strict=False)
+                except OSError:
+                    continue
+                # A symlinked file inside an approved directory must not turn
+                # search into a read of an unrelated location outside it.
+                if candidate.is_symlink() and resolved != root and root not in resolved.parents:
+                    continue
+                files.append(candidate)
                 if len(files) >= 5000:
+                    scan_truncated = True
                     break
-            if len(files) >= 5000:
+            if scan_truncated:
                 break
     else:
         raise FileNotFoundError(f"Path not found: {root}")
 
     matches: list[dict] = []
+    scanned_bytes = 0
+    deadline = time.monotonic() + SEARCH_TIME_LIMIT_SECONDS
+    limit_reached = scan_truncated
     for path in files:
+        if time.monotonic() >= deadline or scanned_bytes >= MAX_SEARCH_BYTES:
+            limit_reached = True
+            break
         try:
-            if path.stat().st_size > MAX_FILE_BYTES:
+            size = path.stat().st_size
+            if size > MAX_FILE_BYTES:
                 continue
-            data = path.read_bytes()
+            with path.open("rb") as stream:
+                data = stream.read(MAX_FILE_BYTES + 1)
+            if len(data) > MAX_FILE_BYTES:
+                continue
+            scanned_bytes += len(data)
             if _is_binary(data):
                 continue
             text = data.decode("utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         for line_number, line in enumerate(text.splitlines(), start=1):
+            if line_number % 200 == 0 and time.monotonic() >= deadline:
+                limit_reached = True
+                break
             if pattern.search(line):
                 matches.append({"path": str(path), "line": line_number, "text": line[:500]})
                 if len(matches) >= 200:
                     return {"path": str(root), "matches": matches, "truncated": True}
-    return {"path": str(root), "matches": matches, "truncated": False}
+        if limit_reached:
+            break
+    return {"path": str(root), "matches": matches, "truncated": limit_reached}
+
+
+def _python_command(script: Path) -> list[str]:
+    if getattr(sys, "frozen", False):
+        # In the PyInstaller app sys.executable is VISION.exe, not a Python
+        # interpreter. The app's entrypoint dispatches this exact helper mode
+        # before constructing any GUI services.
+        return [sys.executable, RUN_PYTHON_HELPER_ARG, str(script)]
+    return [sys.executable, "-I", "-S", str(script)]
 
 
 def _scrubbed_environment() -> dict[str, str]:
@@ -149,24 +226,24 @@ def run_python(args: schemas.RunPythonArgs, context: ToolContext) -> dict:
         with tempfile.NamedTemporaryFile("w", suffix=".py", prefix="vision-run-", delete=False, encoding="utf-8") as stream:
             stream.write(args.code)
             temp_path = Path(stream.name)
-        completed = subprocess.run(
-            [sys.executable, "-I", "-S", str(temp_path)],
-            cwd=str(context.sandbox.workspace),
+        completed = run_bounded(
+            _python_command(temp_path),
+            cwd=context.sandbox.workspace,
             env=_scrubbed_environment(),
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
             timeout=15,
-            check=False,
+            stdout_chars=20_000,
+            stderr_chars=20_000,
         )
         return {
             "exit_code": completed.returncode,
-            "stdout": (completed.stdout or "")[-20000:],
-            "stderr": (completed.stderr or "")[-20000:],
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
         }
     except subprocess.TimeoutExpired as exc:
         return {"exit_code": -1, "stdout": (exc.stdout or "")[-20000:] if isinstance(exc.stdout, str) else "", "stderr": "Timed out after 15 seconds"}
     finally:
-        if temp_path and temp_path.exists():
-            temp_path.unlink()
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass

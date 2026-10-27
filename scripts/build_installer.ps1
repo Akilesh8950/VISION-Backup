@@ -15,6 +15,8 @@ $ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DistDir = Join-Path $Root "dist\VISION"
+$PayloadDir = Join-Path $Root "dist\installer-payload"
+$LauncherDistDir = Join-Path $Root "dist\launcher-dist"
 $OutputDir = Join-Path $Root "dist\installer"
 
 function Write-Sha256File {
@@ -79,6 +81,13 @@ try {
         }
     }
 
+    $leakedWebFiles = @(Get-ChildItem -LiteralPath $DistDir -Recurse -File | Where-Object {
+        $_.FullName -match "\\app\\web\\" -and ($_.Extension -in @(".map", ".jsx", ".tsx", ".ts") -or $_.Name -eq "package.json")
+    })
+    if ($leakedWebFiles.Count -gt 0) {
+        throw "The packaged dist folder contains frontend development/source files: $($leakedWebFiles.FullName -join ', ')"
+    }
+
     if ([string]::IsNullOrWhiteSpace($Version)) {
         $initText = Get-Content -LiteralPath (Join-Path $Root "src\vision_app\__init__.py") -Raw
         if ($initText -notmatch '__version__\s*=\s*"([^"]+)"') {
@@ -88,6 +97,62 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+
+    if ((-not $SkipInstaller) -or $PortableZip) {
+        # Stage the self-updating layout that Inno installs: the small outer
+        # launcher remains stable at the root, while the actual app payload
+        # produced by the existing --onedir build lives under versions.
+        if (Test-Path -LiteralPath $PayloadDir) {
+            $resolvedPayload = [IO.Path]::GetFullPath($PayloadDir)
+            $resolvedDistRoot = [IO.Path]::GetFullPath((Join-Path $Root "dist"))
+            if (-not $resolvedPayload.StartsWith($resolvedDistRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to clean unexpected installer payload path: $resolvedPayload"
+            }
+            Remove-Item -LiteralPath $resolvedPayload -Recurse -Force
+        }
+
+        $versionDir = Join-Path $PayloadDir "versions\$Version"
+        New-Item -ItemType Directory -Force -Path $versionDir | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $PayloadDir "downloads") | Out-Null
+        Copy-Item -Path (Join-Path $DistDir "*") -Destination $versionDir -Recurse -Force
+
+        & $Python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onedir `
+            --windowed `
+            --optimize 1 `
+            --disable-windowed-traceback `
+            --name VISION `
+            --distpath $LauncherDistDir `
+            --workpath (Join-Path $Root "build\launcher-installer") `
+            --specpath (Join-Path $Root "build\launcher-installer") `
+            --icon (Join-Path $Root "assets\vision.ico") `
+            (Join-Path $Root "launcher_stub.py")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Launcher PyInstaller build failed with exit code $LASTEXITCODE"
+        }
+
+        $launcherAppDir = Join-Path $LauncherDistDir "VISION"
+        if (-not (Test-Path -LiteralPath (Join-Path $launcherAppDir "VISION.exe"))) {
+            throw "Launcher executable was not produced under $launcherAppDir"
+        }
+        Copy-Item -Path (Join-Path $launcherAppDir "*") -Destination $PayloadDir -Recurse -Force
+
+        $current = [ordered]@{
+            version = $Version
+            previous = ""
+            model_sha = ""
+            last_checked = $null
+        }
+        $current | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $PayloadDir "current.json") -Encoding UTF8
+
+        foreach ($requiredExe in @((Join-Path $PayloadDir "VISION.exe"), (Join-Path $versionDir "VISION.exe"))) {
+            if (-not (Test-Path -LiteralPath $requiredExe)) {
+                throw "Launcher installer payload is incomplete: missing $requiredExe"
+            }
+        }
+    }
 
     if (-not $SkipInstaller) {
         $iscc = Find-InnoCompiler
@@ -105,7 +170,7 @@ Or pass the compiler path explicitly:
 
         $script = Join-Path $Root "installer\VISION.iss"
         Write-Host "Compiling installer with $iscc"
-        & $iscc "/DAppVersion=$Version" "/DSourceRoot=$Root" "/DDistDir=$DistDir" "/DOutputDir=$OutputDir" $script
+        & $iscc "/DAppVersion=$Version" "/DSourceRoot=$Root" "/DDistDir=$PayloadDir" "/DOutputDir=$OutputDir" $script
         if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup failed with exit code $LASTEXITCODE"
         }
@@ -133,7 +198,7 @@ Or pass the compiler path explicitly:
 
         $stageApp = Join-Path $stageRoot "VISION"
         New-Item -ItemType Directory -Force -Path $stageApp | Out-Null
-        Copy-Item -Path (Join-Path $DistDir "*") -Destination $stageApp -Recurse -Force
+        Copy-Item -Path (Join-Path $PayloadDir "*") -Destination $stageApp -Recurse -Force
         Copy-Item -LiteralPath (Join-Path $Root "installer\VISION.portable") -Destination (Join-Path $stageApp "VISION.portable") -Force
         New-Item -ItemType Directory -Force -Path (Join-Path $stageApp "data") | Out-Null
         New-Item -ItemType Directory -Force -Path (Join-Path $stageApp "workspace") | Out-Null

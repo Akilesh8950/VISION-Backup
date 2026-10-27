@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import logging
 import sys
 from typing import Protocol
 
 SERVICE = "VISION"
+logger = logging.getLogger(__name__)
+_ERROR_NOT_FOUND = 1168
+
+
+def _is_not_found(exc: BaseException) -> bool:
+    if getattr(exc, "winerror", None) == _ERROR_NOT_FOUND:
+        return True
+    args = getattr(exc, "args", ())
+    return bool(args and args[0] == _ERROR_NOT_FOUND)
 
 
 class CredentialStore(Protocol):
@@ -42,14 +52,17 @@ class WindowsCredentialStore:
             item = win32cred.CredRead(win32cred.CRED_TYPE_GENERIC, self._target(key), 0)
             blob = item.get("CredentialBlob", "")
             if isinstance(blob, bytes):
-                for encoding in ("utf-16-le", "utf-8"):
+                encodings = ("utf-16-le", "utf-8") if b"\x00" in blob else ("utf-8", "utf-16-le")
+                for encoding in encodings:
                     try:
                         return blob.decode(encoding).rstrip("\x00")
                     except UnicodeDecodeError:
                         continue
                 return ""
             return str(blob)
-        except Exception:
+        except Exception as exc:
+            if not _is_not_found(exc):
+                logger.warning("Could not read credential %s from Windows Credential Manager", key)
             return ""
 
     def set(self, key: str, value: str) -> None:
@@ -75,8 +88,9 @@ class WindowsCredentialStore:
             import win32cred  # type: ignore
 
             win32cred.CredDelete(win32cred.CRED_TYPE_GENERIC, self._target(key), 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            if not _is_not_found(exc):
+                logger.warning("Could not delete credential %s from Windows Credential Manager", key)
 
 
 def get_credential_store() -> CredentialStore:
@@ -86,5 +100,9 @@ def get_credential_store() -> CredentialStore:
 
             return WindowsCredentialStore()
         except Exception:
+            logger.warning(
+                "Windows Credential Manager is unavailable; secrets will not persist after this run",
+                exc_info=True,
+            )
             return MemoryCredentialStore()
     return MemoryCredentialStore()

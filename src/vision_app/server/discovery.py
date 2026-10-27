@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..constants import MIN_LLAMA_BUILD
 from ..paths import AppPaths
+from ..subprocess_utils import run_bounded
 
 BUILD_RES = (
     re.compile(r"\bbuild\s+(\d{4,6})\b", re.IGNORECASE),
@@ -31,11 +32,13 @@ def candidate_paths(paths: AppPaths, configured_path: str = "") -> list[Path]:
     if configured_path:
         configured = Path(configured_path).expanduser()
         candidates.append(configured / exe if configured.is_dir() else configured)
-    candidates.extend(sorted(paths.bin_dir.rglob(exe)) if paths.bin_dir.exists() else [])
-    candidates.append(Path.cwd() / "third_party/llama.cpp" / exe)
     found = shutil.which("llama-server")
     if found:
         candidates.append(Path(found))
+    # Locked discovery order: bundled -> Settings path -> PATH -> the copy
+    # downloaded into VISION's app-data bin directory. An arbitrary current
+    # working directory is never treated as a trusted bundled location.
+    candidates.extend(sorted(paths.bin_dir.rglob(exe)) if paths.bin_dir.exists() else [])
     # Preserve order while removing duplicates.
     result: list[Path] = []
     seen: set[str] = set()
@@ -83,12 +86,13 @@ def detect_build(binary: Path, timeout: float = 5.0) -> int | None:
     detected = from_path
     try:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-        completed = subprocess.run(
+        completed = run_bounded(
             [str(binary), "--version"],
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            check=False,
+            stdout_chars=20_000,
+            stderr_chars=20_000,
+            stdout_mode="head",
+            stderr_mode="head",
             creationflags=creationflags,
         )
         detected = parse_build_number((completed.stdout or "") + "\n" + (completed.stderr or "")) or from_path

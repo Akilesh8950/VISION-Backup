@@ -1,5 +1,6 @@
 import json
 
+import vision_app.transport.sse as sse_module
 from vision_app.transport.sse import StreamAccumulator, ThinkSplitter
 
 
@@ -39,3 +40,46 @@ def test_reasoning_content_delta():
     acc.feed_line(line({"choices": [{"delta": {"reasoning_content": "think", "content": "answer"}}]}))
     assert acc.reasoning == "think"
     assert acc.content == "answer"
+
+
+def test_stream_accumulator_bounds_lines_text_and_tool_calls(monkeypatch):
+    monkeypatch.setattr(sse_module, "MAX_SSE_LINE_CHARS", 10)
+    acc = StreamAccumulator()
+    events = acc.feed_line("data: " + "x" * 20)
+    assert events[0].kind == "error"
+    assert "oversized" in acc.error
+    monkeypatch.setattr(sse_module, "MAX_SSE_LINE_CHARS", 10_000)
+    assert acc.feed_line(line({"choices": [{"delta": {"content": "later"}}]})) == []
+
+    monkeypatch.setattr(sse_module, "MAX_STREAM_TEXT_CHARS", 5)
+    acc = StreamAccumulator()
+    acc.feed_line(line({"choices": [{"delta": {"reasoning_content": "abc", "content": "defg"}}]}))
+    assert acc.reasoning == "abc"
+    assert acc.content == "de"
+    assert "maximum supported size" in acc.error
+
+    monkeypatch.setattr(sse_module, "MAX_STREAM_TEXT_CHARS", 10_000)
+    monkeypatch.setattr(sse_module, "MAX_TOOL_CALLS", 1)
+    acc = StreamAccumulator()
+    acc.feed_line(line({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "one", "arguments": "{}"}}]}}]}))
+    acc.feed_line(line({"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"name": "two", "arguments": "{}"}}]}}]}))
+    assert "too many tool calls" in acc.error
+    assert len(acc.tool_calls) == 1
+
+    monkeypatch.setattr(sse_module, "MAX_TOOL_CALLS", 128)
+    monkeypatch.setattr(sse_module, "MAX_TOOL_ARGUMENT_CHARS", 3)
+    acc = StreamAccumulator()
+    acc.feed_line(line({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "one", "arguments": "12345"}}]}}]}))
+    assert "oversized tool call" in acc.error
+    assert acc.tool_calls[0].arguments == "123"
+
+
+def test_done_flush_records_partial_tag_suffix_in_accumulator():
+    acc = StreamAccumulator()
+    acc.feed_line(line({"choices": [{"delta": {"content": "answer <th"}}]}))
+    events = acc.feed_line("data: [DONE]")
+    assert any(event.kind == "content" and event.text == "<th" for event in events)
+    assert acc.content == "answer <th"
+    # ChatClient also calls close() after the stream; it must be idempotent.
+    assert acc.close() == []
+    assert acc.content == "answer <th"

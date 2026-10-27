@@ -15,6 +15,7 @@ class TranscriptWidget(QListWidget):
         self.setSpacing(6)
         self.current_assistant: MessageWidget | None = None
         self.tool_cards: dict[str, ToolCardWidget] = {}
+        self._items_by_widget: dict[int, QListWidgetItem] = {}
 
     def _add(self, widget: QWidget) -> QWidget:
         item = QListWidgetItem(self)
@@ -22,16 +23,34 @@ class TranscriptWidget(QListWidget):
         item.setSizeHint(widget.sizeHint().expandedTo(QSize(600, 60)))
         self.addItem(item)
         self.setItemWidget(item, widget)
+        self._items_by_widget[id(widget)] = item
         self.scrollToBottom()
         return widget
 
+    def _refresh_widget(self, widget: QWidget | None) -> None:
+        if widget is None:
+            return
+        item = self._items_by_widget.get(id(widget))
+        if item is None:
+            return
+        widget.adjustSize()
+        item.setSizeHint(widget.sizeHint().expandedTo(QSize(600, 50)))
+
     def refresh_item_sizes(self) -> None:
-        for index in range(self.count()):
-            item = self.item(index)
-            widget = self.itemWidget(item)
-            if widget:
-                widget.adjustSize()
-                item.setSizeHint(widget.sizeHint().expandedTo(QSize(600, 50)))
+        # Keep a full refresh available for bulk history loads and width
+        # changes, but do not use it for every streamed token: adjusting every
+        # historical widget on each token makes long chats quadratic.
+        was_enabled = self.updatesEnabled()
+        self.setUpdatesEnabled(False)
+        try:
+            for index in range(self.count()):
+                item = self.item(index)
+                widget = self.itemWidget(item)
+                if widget:
+                    widget.adjustSize()
+                    item.setSizeHint(widget.sizeHint().expandedTo(QSize(600, 50)))
+        finally:
+            self.setUpdatesEnabled(was_enabled)
         self.scrollToBottom()
 
     def add_message(self, role: str, content: str = "", reasoning: str = "") -> MessageWidget:
@@ -46,17 +65,15 @@ class TranscriptWidget(QListWidget):
         return self.current_assistant
 
     def append_content(self, text: str) -> None:
-        if self.current_assistant is None:
-            self.start_assistant()
-        assert self.current_assistant is not None
-        self.current_assistant.append_content(text)
-        self.refresh_item_sizes()
+        assistant = self.current_assistant or self.start_assistant()
+        assistant.append_content(text)
+        self._refresh_widget(assistant)
+        self.scrollToBottom()
 
     def append_reasoning(self, text: str) -> None:
-        if self.current_assistant is None:
-            self.start_assistant()
-        assert self.current_assistant is not None
-        self.current_assistant.append_reasoning(text)
+        assistant = self.current_assistant or self.start_assistant()
+        assistant.append_reasoning(text)
+        self._refresh_widget(assistant)
 
     def add_tool_card(self, key: str, name: str, arguments="", source: str = "builtin") -> ToolCardWidget:
         existing = self.tool_cards.get(key)
@@ -73,9 +90,11 @@ class TranscriptWidget(QListWidget):
             key, str(getattr(result, "name", "tool")), getattr(result, "arguments", {}), str(getattr(result, "source", "builtin"))
         )
         card.finish(result)
-        self.refresh_item_sizes()
+        self._refresh_widget(card)
+        self.scrollToBottom()
 
     def clear_transcript(self) -> None:
         self.clear()
         self.current_assistant = None
         self.tool_cards.clear()
+        self._items_by_widget.clear()

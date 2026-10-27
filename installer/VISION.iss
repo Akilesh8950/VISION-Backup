@@ -2,13 +2,13 @@
 ; Build through scripts\build_installer.ps1 so version and dist paths stay in sync.
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "1.0.0"
 #endif
 #ifndef SourceRoot
   #define SourceRoot ".."
 #endif
 #ifndef DistDir
-  #define DistDir "..\dist\VISION"
+  #define DistDir "..\dist\installer-payload"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist\installer"
@@ -59,11 +59,15 @@ Name: "startmenuicon"; Description: "Create Start Menu shortcuts"; GroupDescript
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Dirs]
+Name: "{app}\downloads"
+Name: "{app}\versions"
 Name: "{app}\data"; Check: UsePortableData
 Name: "{app}\workspace"; Check: UsePortableData
 
 [Files]
-; PyInstaller one-folder output. Never package a developer/test data folder or model file.
+; Launcher tree built by scripts\build_installer.ps1: the stable outer
+; VISION.exe sits beside current.json/versions and launches
+; versions\<AppVersion>\VISION.exe. Never package developer data or a model.
 Source: "{#DistDir}\*"; DestDir: "{app}"; Excludes: "data\*,workspace\*,*.gguf,{#PortableMarker}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SourceRoot}\installer\{#PortableMarker}"; DestDir: "{app}"; Check: UsePortableData; Flags: onlyifdoesntexist
 
@@ -71,6 +75,17 @@ Source: "{#SourceRoot}\installer\{#PortableMarker}"; DestDir: "{app}"; Check: Us
 ; If an upgrade switches from portable to standard data, remove the old marker.
 ; Existing portable data itself is deliberately left untouched.
 Type: files; Name: "{app}\{#PortableMarker}"; Check: UseStandardData
+
+[UninstallDelete]
+; Downloaded app versions are program files, not user data. Remove the
+; launcher-managed payloads/cache on uninstall while still leaving portable
+; data\ and workspace\ untouched above the installer layer.
+Type: filesandordirs; Name: "{app}\versions"
+Type: filesandordirs; Name: "{app}\downloads"
+Type: files; Name: "{app}\current.json"
+Type: files; Name: "{app}\pending.json"
+Type: files; Name: "{app}\launcher-state.json"
+Type: files; Name: "{app}\rollback-notice.txt"
 
 [Icons]
 Name: "{autoprograms}\VISION"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: startmenuicon
@@ -83,6 +98,7 @@ Filename: "{app}\{#AppExeName}"; Description: "Launch VISION"; WorkingDir: "{app
 [Code]
 var
   DataModePage: TInputOptionWizardPage;
+  PreviousInstalledVersion: String;
 
 function UsePortableData: Boolean;
 begin
@@ -94,6 +110,75 @@ end;
 function UseStandardData: Boolean;
 begin
   Result := not UsePortableData;
+end;
+
+function ExtractCurrentVersion(const Text: String): String;
+var
+  KeyPos: Integer;
+  ColonPos: Integer;
+  QuoteStart: Integer;
+  QuoteEnd: Integer;
+begin
+  Result := '';
+  KeyPos := Pos('"version"', Text);
+  if KeyPos = 0 then Exit;
+
+  ColonPos := Pos(':', Copy(Text, KeyPos, Length(Text) - KeyPos + 1));
+  if ColonPos = 0 then Exit;
+  ColonPos := KeyPos + ColonPos - 1;
+
+  QuoteStart := Pos('"', Copy(Text, ColonPos + 1, Length(Text) - ColonPos));
+  if QuoteStart = 0 then Exit;
+  QuoteStart := ColonPos + QuoteStart;
+
+  QuoteEnd := Pos('"', Copy(Text, QuoteStart + 1, Length(Text) - QuoteStart));
+  if QuoteEnd = 0 then Exit;
+  QuoteEnd := QuoteStart + QuoteEnd;
+
+  if QuoteEnd > QuoteStart + 1 then
+    Result := Copy(Text, QuoteStart + 1, QuoteEnd - QuoteStart - 1);
+end;
+
+function ReadExistingCurrentVersion: String;
+var
+  Raw: AnsiString;
+begin
+  Result := '';
+  if LoadStringFromFile(ExpandConstant('{app}\current.json'), Raw) then
+    Result := ExtractCurrentVersion(String(Raw));
+end;
+
+procedure WriteCurrentJson;
+var
+  PreviousVersion: String;
+  Content: String;
+begin
+  PreviousVersion := PreviousInstalledVersion;
+  if (PreviousVersion = '') or (CompareText(PreviousVersion, '{#AppVersion}') = 0) then
+    PreviousVersion := '';
+  if (PreviousVersion <> '') and
+     not FileExists(ExpandConstant('{app}\versions\') + PreviousVersion + '\{#AppExeName}') then
+    PreviousVersion := '';
+
+  Content :=
+    '{' + #13#10 +
+    '  "version": "{#AppVersion}",' + #13#10 +
+    '  "previous": "' + PreviousVersion + '",' + #13#10 +
+    '  "model_sha": "",' + #13#10 +
+    '  "last_checked": null' + #13#10 +
+    '}' + #13#10;
+  SaveStringToFile(ExpandConstant('{app}\current.json'), AnsiString(Content), False);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  { Capture the launcher selection before [Files] overwrites current.json;
+    after installation, select this setup's version while preserving the
+    previously installed version as the rollback target. }
+  if CurStep = ssInstall then
+    PreviousInstalledVersion := ReadExistingCurrentVersion;
+  if CurStep = ssPostInstall then
+    WriteCurrentJson;
 end;
 
 function WebView2Installed: Boolean;

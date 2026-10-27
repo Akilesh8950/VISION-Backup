@@ -10,8 +10,11 @@ Implementation supersession: the shipping default UI is an original offline
 React/WebView2 interpretation of the sidebar, centered transcript, floating
 composer, reasoning/tool disclosure and work-surface patterns in this spec.
 It uses warm graphite/ivory flat surfaces, custom SVG icons and no CSS/canvas
-gradients. Current captures are in `docs/screenshots/react-*.png`; the Qt
-implementation remains the `--qt` rollback surface.
+gradients. The current shell is a 260 px sidebar that collapses to a 64 px
+icon rail, with Pinned chats, collapsible Project groups, a virtualized chat
+history, an Item Library for uploads, and a seven-tab Settings sheet. Current
+captures are in `docs/screenshots/react-*.png`; the Qt implementation remains
+the `--qt` rollback surface.
 
 ## 1. Design intent
 
@@ -67,7 +70,9 @@ to copy.
 
 ### Layout rules
 
-- Sidebar defaults to roughly 260 px and collapses to an icon rail.
+- Sidebar is 260 px expanded and 64 px collapsed. The VISION logo is the
+  expand/collapse toggle in both states, transitions run for 200 ms, and the
+  chosen state persists across launches.
 - Transcript text has a maximum readable width; tables/charts may use a wider
   region or move to the work panel.
 - The work panel is hidden by default, opens for a chart/table/diff/resource,
@@ -80,24 +85,42 @@ to copy.
 
 ### Conversation section
 
-- **New chat** button and keyboard shortcut.
-- Search across local conversation titles and text.
-- Groups: Pinned, Today, Yesterday, Previous 7 days, Older.
-- Context menu: rename, pin/unpin, export, archive and delete. Deleting a
-  local conversation is a normal user-initiated app action with confirmation;
-  it is not exposed as a model tool.
-- Each conversation remembers endpoint, active workspace, enabled skills, and
-  enabled MCP servers/connectors.
+- **New chat** button. When a project filter or project group supplies the
+  action, the new conversation starts in that project.
+- Search across local conversation titles and text. In the icon rail, Search
+  expands the sidebar and focuses the search field after the 200 ms shell
+  transition.
+- A project filter offers All projects, No project, or one project, plus a
+  create-project action. The filter and each project group's collapsed state
+  persist.
+- The list is virtualized so large histories mount only visible rows (plus a
+  small overscan). **Pinned** is always the first section, followed by
+  collapsible **Projects** groups and **History** grouped as Today,
+  Yesterday, Previous 7 days and Earlier.
+- A completed first exchange auto-names an untouched `New chat` with a
+  compact 3–5 word title. Double-clicking a title edits it inline; Enter or
+  blur saves and Escape cancels.
+- Each row's `⋯` menu offers Rename, Pin/Unpin, Move to project and Delete.
+  Pinned deletion uses an extra “Unpin & delete” confirmation. Deleting a
+  local conversation is a normal user-initiated app action; it is not exposed
+  as a model tool.
 
-### App sections
+### Sidebar footer and Item Library
 
-- **Chat**
-- **Projects** — project settings, instructions and knowledge sources (F2/F4)
-- **Extensions** — built-in tools, MCP servers, Skills, Connectors
-- **Models** — installed GGUF, update status, server binary and VRAM/context
-- **Activity** — audit log, feedback queue, downloads and timers
-- **Settings**
-- **About** — version, build/commit and the product credits line
+- **Item Library** — persistent managed copies of uploaded files.
+- **Server** — model server lifecycle and diagnostics.
+- **Activity & feedback** — audit log, feedback queue, downloads and timers.
+- **Settings** — the tabbed Settings sheet described in section 12.
+- Theme toggle.
+
+The Item Library is lazily loaded and virtualized. Each row shows a bounded
+image thumbnail or a file-type icon, display name, extension/type, size, date
+and the number of distinct chats in which the file was actually consumed.
+Rows support attach-to-message, rename and delete. Imports are deduplicated,
+capped at 25 MB per file and 1,000 managed items, and never expose a local
+filesystem path or stored filename to the renderer. Only supported UTF-8 text
+files up to 256 KB are attachable; PDFs, images, media, archives and other
+formats remain stored for reference.
 
 ## 5. Empty state
 
@@ -161,8 +184,10 @@ the transcript and can be opened in the work panel.
   invocations and MCP prompts.
 - `@` opens mention search for workspace files, skills, and MCP resources.
 - Drag-and-drop and paste are supported for supported attachment types.
-- Attachments remain removable chips before sending; unsupported binaries are
-  rejected with the reason, not silently ignored.
+- Attachments remain removable chips before sending. Every direct upload is
+  also saved to the Item Library; unsupported or oversized formats are saved
+  without being attached and the UI explains that only supported UTF-8 text
+  up to 256 KB can be sent with a message.
 - Chips above the composer show the active skill set, MCP servers, connectors,
   project/workspace and endpoint. A chip can be disabled for the next turn.
 - Token/context meter is labelled as an estimate unless approval A11 changes it.
@@ -280,19 +305,40 @@ remote URL → privacy/feedback choice (default off) → Extensions intro (can s
   default OFF.
 - Upload progress/failure is shown without exposing the HF token.
 
-## 12. Settings information architecture
+## 12. Settings information architecture and confidentiality
 
-- General: startup behaviour, default endpoint mode, workspace location
-- Model & Server: model path, server binary, port, context, GPU layers
-- Endpoints: remote base URL, model override, optional Bearer credential
-- Extensions: shortcuts to MCP, Skills and Connectors management
-- Privacy & Feedback: opt-in upload, queue controls, credential status
-- Data: history location/export, memory viewer if optional feature selected
-- Appearance: theme, density and font size (dark default)
-- Shortcuts: keyboard reference; user editing only if selected as optional work
-- About: version, commit and credits
+Settings is a deliberately quiet tabbed sheet with its own left-hand tab
+list; it does not compete visually with the premium chat transcript. The tabs
+are exactly:
 
-Secrets fields show only "Stored/Not stored" plus Set/Replace and Remove.
+- General: appearance, active project, automatic local-server start and the
+  connected-tool cap under Advanced.
+- Model: local readiness/status, GPU layers, downloads and update check;
+  paths, binary selection, port and context are under Advanced. The backup
+  connection also lives here: Local/Auto/Cloud choice, masked write-only key,
+  and its hidden address/model override under Advanced.
+- Tools: Skills plus MCP servers/connectors, with plain-language summaries,
+  import, discovery/trust and refresh; technical connection details stay
+  collapsed.
+- Library: the same Item Library embedded as a settings page, including
+  search, upload, attach, rename, delete and used-in-chats counts.
+- Privacy: telemetry choice, feedback queue/export/upload, installation mode
+  and the masked download-access key; exact storage folders stay collapsed.
+- About: product version, interface status and credits.
+
+Secret fields show only "Stored/Not stored" plus write-only Replace/Remove.
+The saved backup-service address is likewise not returned to the renderer:
+leaving it blank keeps it, typing replaces it, and an explicit clear action
+removes it. Tool cards show safe summaries by default and put raw arguments or
+results behind details. Source and Activity surfaces show titles, hosts and
+filenames rather than full URLs, local paths or raw backend payloads.
+
+The main conversation sidebar uses the VISION logo as its explicit
+expand/collapse toggle. The expanded 260 px form shows labels, search,
+project controls and the virtualized conversation list; the 64 px icon rail
+retains New chat, Search, recent/pinned chats, project shortcuts and footer
+actions with tooltips. Sidebar state, project filter and collapsed project
+groups persist across launches.
 
 ## 13. Visual language
 
@@ -325,6 +371,8 @@ Secrets fields show only "Stored/Not stored" plus Set/Replace and Remove.
 |---|---|
 | `Ctrl+N` | New chat |
 | `Ctrl+K` | Search/command palette |
+| `Ctrl+B` | Toggle sidebar |
+| `Ctrl+L` | Toggle Item Library |
 | `Ctrl+Shift+S` | Toggle server console |
 | `Ctrl+,` | Settings |
 | `Ctrl+.` while streaming | Stop response |
@@ -342,3 +390,53 @@ Secrets fields show only "Stored/Not stored" plus Set/Replace and Remove.
   checkpoint/restore actions, read-only Git status and named test profiles.
 - **Index/reader jobs:** document indexing and URL extraction appear in
   Activity with progress/cancel; failures name the source and reason.
+
+## 17. Release-build confidentiality boundary
+
+- Production frontend output is minified and built without source maps.
+- Frozen builds ignore `--debug`; pywebview developer tooling remains
+  source-checkout-only.
+- PyInstaller packaging stores application modules as optimized compiled
+  bytecode, and both Windows build scripts fail if frontend source files or
+  source maps leak into the release payload.
+- Secrets are protected by Windows Credential Manager, renderer payload
+  minimization and redaction—not by hiding an embedded secret in client code.
+- These measures prevent casual source/secret inspection. A determined owner
+  of a local machine can still reverse-engineer any local application, so no
+  confidential owner/service secret may be embedded in the client.
+
+## 18. Voice, window sizes, and motion
+
+### Voice (Settings order: General, Voice, Model, Tools, Library, Privacy, Updates, About)
+
+- Every finished answer has a **Listen** action. It reads with the voice and
+  style from Settings → Voice; while speaking it becomes **Stop** (warm
+  highlight), and clicking another answer's Listen switches to it. Esc stops
+  speech; switching chats silences it.
+- Default style is **Soothing — warm & slow**: Auto picks the calmest
+  natural warm voice installed on the PC (shown by name in the picker),
+  slightly slowed with softened pitch. Users can pick any installed voice,
+  choose another style (Calm & deep, Natural, Bright & clear, Slow & clear),
+  or use Custom speed/pitch/volume sliders. **Hear a sample** auditions the
+  current (even unsaved) selection instantly.
+- "Read each finished answer aloud automatically" is available and **off by
+  default**. When no voice exists on the PC, Listen explains how to add one
+  (Windows Settings → Time & language → Speech) instead of failing silently.
+
+### Window sizes
+
+- Minimum window 520×460; verified comfortable from 400 px previews to
+  large monitors, including short (480 px-high) windows. At ≤900 px the
+  sidebar becomes the icon rail automatically (the user's saved preference
+  returns when the window widens); Settings tabs become a scrollable top
+  bar; at ≤720 px dialogs and side panels go full-width; at ≤540/≤420 px
+  chrome compacts (short title bar, folded status chips) while chat,
+  composer mode toggle, and send remain one tap away. No horizontal
+  scrolling at any size.
+
+### Motion
+
+- Enter/hover/press feedback is 120–200 ms, transform/opacity only.
+  **Settings → General → Reduce animations** (and the OS reduced-motion
+  setting, and Low-end CPU performance mode) calm or remove animations
+  app-wide; spinners keep signalling activity.

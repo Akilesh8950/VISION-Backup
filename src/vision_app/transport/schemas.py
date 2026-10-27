@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -44,11 +45,22 @@ class ToolCallAccumulator(BaseModel):
     def merge(self, delta: dict[str, Any]) -> None:
         if delta.get("id"):
             self.id = str(delta["id"])
-        function = delta.get("function") or {}
+        function = delta.get("function")
+        if not isinstance(function, dict):
+            return
         if function.get("name"):
             self.name += str(function["name"])
-        if function.get("arguments"):
-            self.arguments += str(function["arguments"])
+        arguments = function.get("arguments")
+        if arguments is None:
+            return
+        if isinstance(arguments, str):
+            self.arguments += arguments
+        elif isinstance(arguments, (dict, list, int, float, bool)):
+            # Some compatible servers emit an already-decoded JSON value in a
+            # non-streamed choice. Preserve it as JSON instead of Python repr.
+            self.arguments += json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+        else:
+            self.arguments += str(arguments)
 
     def to_tool_call(self) -> ToolCall:
         return ToolCall(

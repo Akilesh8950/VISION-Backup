@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
-import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -37,18 +37,29 @@ from .. import BUILD_COMMIT, __version__
 from ..chat.worker import ChatWorker
 from ..code_workspace.git_status import git_status
 from ..code_workspace.test_profiles import run_test_profile
-from ..constants import CREDITS_LINE, MIN_LLAMA_BUILD
-from ..extensions.connectors import connector_as_server, load_connectors, save_connectors
-from ..extensions.mcp_config import McpServerConfig, load_mcp_config, save_mcp_config
+from ..constants import CREDITS_LINE, EXPECTED_GGUF_SIZE, MIN_LLAMA_BUILD
+from ..extensions.connectors import (
+    connector_as_server,
+    load_connectors,
+    load_connectors_resilient,
+    save_connectors,
+)
+from ..extensions.mcp_config import (
+    McpServerConfig,
+    load_mcp_config,
+    load_mcp_config_resilient,
+    save_mcp_config,
+)
 from ..extensions.mcp_tools import make_mcp_tool_definition
 from ..genui.cards_widget import CardsWidget
 from ..genui.factory import build_genui_widget
+from ..history import generate_conversation_title
 from ..knowledge.retrieval import build_project_context
 from ..server.discovery import detect_build, find_llama_server
 from ..server.download_llama import download_llama
-from ..server.health import HealthState
+from ..server.health import STARTUP_GRACE_SECONDS, HealthState, check_health_sync
 from ..telemetry.uploader import upload_in_background, upload_needs_log
-from ..tools.registry import ToolExecutionResult
+from ..tools.registry import ToolDefinition, ToolExecutionResult
 from ..updater.downloads import download_model
 from ..updater.model_updater import check_for_update
 from .code_panel import CodePanel
@@ -64,6 +75,8 @@ from .toasts import Toast
 from .transcript import TranscriptWidget
 from .wizard import FirstRunWizard
 from .workers import FunctionWorker
+
+logger = logging.getLogger(__name__)
 
 
 class _Bridge(QObject):
@@ -98,8 +111,15 @@ class MainWindow(QMainWindow):
         self._dynamic_names: set[str] = set()
         self._pending_context_blocks: list[str] = []
         self._latest_remote_sha = ""
+        self._latest_remote_size = 0
         self._health_state = HealthState()
         self._health_check_running = False
+        self._server_desired_running = bool(self.config.auto_start_local_server and self.server_manager.is_running)
+        self._server_intentionally_stopped = not self._server_desired_running
+        self._server_started_monotonic: float | None = self.server_manager.started_at
+        self._chat_prepare_running = False
+        self._active_chat_conversation_id = ""
+        self._closing = False
         self._current_sources: list[dict] = []
         self._system_cards: CardsWidget | None = None
 
@@ -136,7 +156,11 @@ class MainWindow(QMainWindow):
         elif self.conversations.count():
             self.conversations.setCurrentRow(0)
         self._refresh_extensions()
-        self._maybe_start_server()
+        if self.config.auto_start_local_server:
+            self._maybe_start_server(force=True)
+        else:
+            self.health_label.setText("Server: stopped")
+            self.server_console.set_state("Stopped")
 
         self.health_timer = QTimer(self)
         self.health_timer.setInterval(5000)
@@ -191,7 +215,9 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(main)
         header = QHBoxLayout()
         sidebar_toggle = QPushButton("☰"); sidebar_toggle.setFixedWidth(36); sidebar_toggle.clicked.connect(lambda: self.sidebar.setVisible(not self.sidebar.isVisible()))
-        self.header_title = QLabel("<b>New chat</b>")
+        self.header_title = QLabel("New chat")
+        self.header_title.setTextFormat(Qt.TextFormat.PlainText)
+        self.header_title.setStyleSheet("font-weight: 700;")
         self.endpoint_label = QLabel("AUTO")
         self.health_label = QLabel("Server: unknown")
         self.model_label = QLabel(Path(self.config.model_path).name if self.config.model_path else "No model")
@@ -224,7 +250,7 @@ class MainWindow(QMainWindow):
 
         self.server_console = ServerConsoleWidget(self)
         self.server_console.restart_requested.connect(self._restart_server)
-        self.server_console.start_requested.connect(self._maybe_start_server)
+        self.server_console.start_requested.connect(lambda: self._maybe_start_server(force=True))
         self.server_console.stop_requested.connect(self._stop_server)
         self.bridge.server_log.connect(self.server_console.append_line)
         self.server_dock = QDockWidget("Server console", self)
@@ -251,15 +277,48 @@ class MainWindow(QMainWindow):
             self.banner.hide()
 
     # ---------- background ----------
-    def _run_background(self, function, on_success=None, on_failure=None) -> None:
-        thread = QThread(self); worker = FunctionWorker(function); worker.moveToThread(thread)
-        pair = (thread, worker); self._background.append(pair)
+    def _run_background(self, function, on_success=None, on_failure=None) -> bool:
+        thread = QThread(self)
+        worker = FunctionWorker(function)
+        worker.moveToThread(thread)
+        pair = (thread, worker)
+        self._background.append(pair)
+
+        def cleanup() -> None:
+            if pair in self._background:
+                self._background.remove(pair)
+            worker.deleteLater()
+            thread.deleteLater()
+
+        def success(result) -> None:
+            if on_success:
+                try:
+                    on_success(result)
+                except Exception as exc:
+                    self._show_banner(str(exc))
+
+        def failure(error: str) -> None:
+            try:
+                if on_failure:
+                    on_failure(error)
+                else:
+                    self._show_banner(error)
+            except Exception as exc:
+                self._show_banner(str(exc))
+
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda result: on_success and on_success(result))
-        worker.failed.connect(lambda error: on_failure(error) if on_failure else self._show_banner(error))
-        worker.finished.connect(thread.quit); worker.failed.connect(thread.quit)
-        thread.finished.connect(lambda: self._background.remove(pair) if pair in self._background else None)
-        thread.start()
+        worker.finished.connect(success)
+        worker.failed.connect(failure)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(cleanup)
+        try:
+            thread.start()
+        except Exception as exc:
+            cleanup()
+            failure(str(exc))
+            return False
+        return True
 
     # ---------- conversations/projects ----------
     def _current_conversation_id(self) -> str:
@@ -292,7 +351,7 @@ class MainWindow(QMainWindow):
         conversation_id = self._current_conversation_id()
         if not conversation_id: return
         row = next((item for item in self.history.list_conversations(include_archived=True) if item["id"] == conversation_id), None)
-        self.header_title.setText(f"<b>{row['title'] if row else 'Chat'}</b>")
+        self.header_title.setText(str(row["title"] if row else "Chat"))
         if row and row.get("project_id"):
             index = self.project_combo.findData(row["project_id"])
             if index >= 0:
@@ -304,6 +363,7 @@ class MainWindow(QMainWindow):
         self.transcript.clear_transcript(); self._current_sources = []; self.sources_panel.set_sources([])
         rows = self.history.list_messages(conversation_id)[-100:]
         tool_index = 0
+        tool_names: dict[str, str] = {}
         for row in rows:
             if row["role"] in {"user", "assistant"}:
                 widget = self.transcript.add_message(row["role"], row["content"], row.get("reasoning", ""))
@@ -311,10 +371,19 @@ class MainWindow(QMainWindow):
                 for call in row.get("tool_calls") or []:
                     tool_index += 1
                     function = call.get("function") or {}
-                    self.transcript.add_tool_card(str(call.get("id") or tool_index), str(function.get("name") or "tool"), function.get("arguments", ""))
+                    call_id = str(call.get("id") or tool_index)
+                    name = str(function.get("name") or "tool")
+                    tool_names[call_id] = name
+                    arguments = function.get("arguments", "")
+                    self.transcript.add_tool_card(
+                        call_id,
+                        name,
+                        arguments if isinstance(arguments, str) else json.dumps(arguments, ensure_ascii=False),
+                    )
             elif row["role"] == "tool":
+                call_id = str(row.get("tool_call_id") or tool_index)
                 result = ToolExecutionResult(
-                    tool_call_id=str(row.get("tool_call_id") or tool_index), name="tool",
+                    tool_call_id=call_id, name=tool_names.get(call_id, "tool"),
                     content_for_model=row["content"], summary=row["content"][:240], raw=row["content"],
                 )
                 self.transcript.finish_tool(result)
@@ -329,7 +398,13 @@ class MainWindow(QMainWindow):
     def _pin_conversation(self) -> None:
         conversation_id = self._current_conversation_id()
         if not conversation_id: return
-        row = next(item for item in self.history.list_conversations(include_archived=True) if item["id"] == conversation_id)
+        row = next(
+            (item for item in self.history.list_conversations(include_archived=True) if item["id"] == conversation_id),
+            None,
+        )
+        if row is None:
+            self._refresh_conversations()
+            return
         self.history.set_conversation_flags(conversation_id, pinned=not bool(row["pinned"])); self._refresh_conversations()
 
     def _archive_conversation(self) -> None:
@@ -407,7 +482,7 @@ class MainWindow(QMainWindow):
     def _correct_message(self) -> None:
         text, ok = QInputDialog.getMultiLineText(self, "Correct this", "What should VISION have done?")
         if ok and text.strip():
-            self.controller.record_feedback(self._current_conversation_id(), detail=text.strip()); self._toast("Correction saved locally")
+            self.controller.record_feedback(self._current_conversation_id(), detail={"target": text.strip(), "source": "correct_message"}); self._toast("Correction saved locally")
 
     def _regenerate(self) -> None:
         if self.composer._running: return
@@ -438,7 +513,12 @@ class MainWindow(QMainWindow):
         label, ok = QInputDialog.getItem(self, "MCP resource", "Resource:", [o[0] for o in options], editable=False)
         if not ok: return
         _label, server_id, uri = next(o for o in options if o[0] == label)
-        self._run_background(lambda: self.extension_host.read_resource(server_id, uri), lambda result: self._pending_context_blocks.append(f"MCP resource {uri}:\n{str(result)[:20000]}") or self._toast("Resource attached to next message"))
+
+        def attached(result) -> None:
+            self._pending_context_blocks.append(f"MCP resource {uri}:\n{str(result)[:20000]}")
+            self._toast("Resource attached to next message")
+
+        self._run_background(lambda: self.extension_host.read_resource(server_id, uri), attached)
 
     def _pick_mcp_prompt(self) -> None:
         options: list[tuple[str, str, str]] = []
@@ -456,19 +536,39 @@ class MainWindow(QMainWindow):
         self._prepare_and_start(text, attachments, regenerate=False)
 
     def _prepare_and_start(self, text: str, attachments: list[Path], *, regenerate: bool) -> None:
+        if self._chat_prepare_running or self.chat_worker.is_running or getattr(self.composer, "_running", False):
+            self._show_banner("A response is already running")
+            return
+        self._chat_prepare_running = True
         conversation_id = self._current_conversation_id()
         if not conversation_id:
             self._new_conversation(); conversation_id = self._current_conversation_id()
         project = self._active_project()
-        pending_context = list(self._pending_context_blocks); self._pending_context_blocks.clear()
+        # Do not consume queued MCP context until preparation and submission
+        # both succeed; previously a bad attachment discarded it silently.
+        pending_context = list(self._pending_context_blocks)
         skills_enabled = self._enabled_skill_names()
         dynamic_names = set(self._dynamic_names)
 
         def prepare() -> dict[str, Any]:
             final_text = text
+            if len(attachments) > 10:
+                raise RuntimeError("Too many attachments; attach at most 10 files")
+            total_bytes = 0
             for attachment in attachments:
-                if attachment.stat().st_size > 256 * 1024: raise RuntimeError(f"Attachment exceeds 256 KB: {attachment.name}")
-                content = attachment.read_text(encoding="utf-8")
+                with attachment.open("rb") as handle:
+                    raw = handle.read(256 * 1024 + 1)
+                if len(raw) > 256 * 1024:
+                    raise RuntimeError(f"Attachment exceeds 256 KB: {attachment.name}")
+                total_bytes += len(raw)
+                if total_bytes > 1024 * 1024:
+                    raise RuntimeError("Attachments exceed 1 MB in total")
+                if b"\x00" in raw:
+                    raise RuntimeError(f"Attachment is not UTF-8 text: {attachment.name}")
+                try:
+                    content = raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise RuntimeError(f"Attachment is not UTF-8 text: {attachment.name}") from exc
                 final_text += f"\n\nAttachment: {attachment.name}\n```\n{content}\n```"
             context_blocks: list[str] = []
             sources: list[dict] = []
@@ -488,6 +588,7 @@ class MainWindow(QMainWindow):
             return {"text": final_text, "system_context": "\n\n".join(context_blocks), "sources": sources}
 
         def start(prepared: dict[str, Any]) -> None:
+            self._chat_prepare_running = False
             if not regenerate:
                 widget = self.transcript.add_message("user", prepared["text"] if len(prepared["text"]) < 5000 else text + "\n\n[Attachment content included in request]")
                 self._connect_message(widget)
@@ -497,18 +598,32 @@ class MainWindow(QMainWindow):
             max_dynamic = max(0, self.config.max_extension_tools)
             builtins = 29 if skills_enabled else 28
             tools = tools[:builtins + max_dynamic]
-            self.chat_worker.submit(
+            submitted = self.chat_worker.submit(
                 conversation_id=conversation_id,
                 user_text=prepared["text"],
                 tools=tools,
                 system_context=prepared["system_context"],
                 pre_sources=prepared["sources"],
             )
+            if not submitted:
+                self.composer.set_running(False)
+                self._show_banner("A response is already running")
+                return
+            for block in pending_context:
+                if block in self._pending_context_blocks:
+                    self._pending_context_blocks.remove(block)
+            self._active_chat_conversation_id = conversation_id
             self.composer.set_running(True)
             if regenerate: self.regenerate_requested.emit()
             else: self.run_chat_requested.emit()
 
-        self._run_background(prepare, start)
+        def failed(error: str) -> None:
+            self._chat_prepare_running = False
+            self.composer.set_running(False)
+            self._show_banner(error)
+
+        if not self._run_background(prepare, start, failed):
+            self._chat_prepare_running = False
 
     def _on_content(self, text: str) -> None:
         self.transcript.append_content(text)
@@ -567,28 +682,53 @@ class MainWindow(QMainWindow):
             self._show_banner(str(selection.error))
 
     def _on_turn_finished(self, result) -> None:
-        self.composer.set_running(False)
-        conversation_id = self._current_conversation_id()
-        if conversation_id:
-            rows = self.history.list_conversations(include_archived=True)
-            row = next((item for item in rows if item["id"] == conversation_id), None)
-            if row and row["title"] == "New chat":
-                prompt, _answer = self.history.last_exchange(conversation_id)
-                if prompt: self.history.rename_conversation(conversation_id, prompt[:48])
-        self._refresh_conversations()
-        if getattr(result, "error", ""): self._show_banner(str(result.error))
+        try:
+            conversation_id = str(getattr(result, "conversation_id", "") or self._active_chat_conversation_id)
+            if conversation_id:
+                rows = self.history.list_conversations(include_archived=True)
+                row = next((item for item in rows if item["id"] == conversation_id), None)
+                if row and row["title"] == "New chat":
+                    prompt, answer = self.history.first_exchange(conversation_id)
+                    if prompt:
+                        self.history.rename_conversation(
+                            conversation_id,
+                            generate_conversation_title(prompt, answer),
+                        )
+            self._refresh_conversations()
+            if getattr(result, "error", ""): self._show_banner(str(result.error))
+        finally:
+            self._active_chat_conversation_id = ""
+            self.composer.set_running(False)
 
     def _schedule_timer(self, minutes: float, label: str) -> None:
         QTimer.singleShot(max(1, int(minutes * 60_000)), lambda: QMessageBox.information(self, "VISION timer", label))
 
     # ---------- server/health ----------
-    def _maybe_start_server(self) -> bool:
+    def _model_file(self) -> Path:
+        return Path(self.config.model_path or self.paths.model_file)
+
+    def _mark_server_not_desired(self, label: str, state: str) -> None:
+        self._server_desired_running = False
+        self._server_intentionally_stopped = True
+        self._server_started_monotonic = None
+        self._health_state.reset()
+        self.health_label.setText(label)
+        self.server_console.set_state(state)
+
+    def _maybe_start_server(self, *, force: bool = False, automatic_restart: bool = False) -> bool:
+        if not force and not self.config.auto_start_local_server:
+            if not self.server_manager.is_running:
+                self._mark_server_not_desired("Server: stopped", "Stopped")
+            return self.server_manager.is_running
         if self.server_manager.is_running:
+            self._server_desired_running = True
+            self._server_intentionally_stopped = False
+            self._server_started_monotonic = self.server_manager.started_at or self.server_manager.last_started_at or time.monotonic()
+            self._health_state.reset(clear_restart_attempt=not automatic_restart)
             return True
-        model = Path(self.config.model_path or self.paths.model_file)
+        model = self._model_file()
         if not model.exists():
-            self.health_label.setText("Server: model missing")
-            self.server_console.set_state("Model missing")
+            self._mark_server_not_desired("Server: model missing", "Model missing")
             return False
 
         binary = find_llama_server(
@@ -601,42 +741,49 @@ class MainWindow(QMainWindow):
             if unsupported:
                 build = detect_build(unsupported)
                 detected = f"b{build}" if build else "unknown"
-                self.health_label.setText("Server: unsupported llama.cpp build")
-                self.server_console.set_state(f"Unsupported llama.cpp build ({detected})")
+                self._mark_server_not_desired(
+                    "Server: unsupported llama.cpp build",
+                    f"Unsupported llama.cpp build ({detected})",
+                )
                 self._show_banner(
                     f"Found llama-server build {detected}; VISION requires b{MIN_LLAMA_BUILD} or newer. "
                     "Use Model Manager to download the pinned supported build."
                 )
             else:
-                self.health_label.setText("Server: llama-server missing")
-                self.server_console.set_state("llama-server missing")
+                self._mark_server_not_desired("Server: llama-server missing", "llama-server missing")
             return False
 
         try:
             self.server_manager.start(binary, model, self.config)
+            self._server_desired_running = True
+            self._server_intentionally_stopped = False
+            self._server_started_monotonic = self.server_manager.started_at or time.monotonic()
+            self._health_state.reset(clear_restart_attempt=not automatic_restart)
             self.health_label.setText("Server: starting")
             self.server_console.set_state("Starting")
             return True
         except Exception as exc:
+            self._mark_server_not_desired("Server: start failed", "Start failed")
             self._show_banner(f"Could not start llama-server: {exc}")
             return False
 
-    def _restart_server(self) -> None:
-        self.server_manager.stop(); self._maybe_start_server()
+    def _restart_server(self, *, automatic_restart: bool = False) -> None:
+        preserved = self._health_state.restart_attempted
+        self.server_manager.stop()
+        if automatic_restart:
+            self._health_state.restart_attempted = preserved
+        self._maybe_start_server(force=True, automatic_restart=automatic_restart)
 
     def _stop_server(self) -> None:
-        self.server_manager.stop(); self.health_label.setText("Server: stopped"); self.server_console.set_state("Stopped")
+        self._mark_server_not_desired("Server: stopped", "Stopped")
+        self.server_manager.stop()
 
     @staticmethod
     def _sync_health(url: str) -> bool:
-        try:
-            with urllib.request.urlopen(url.rstrip("/") + "/models", timeout=3) as response:
-                return response.status == 200
-        except Exception:
-            return False
+        return check_health_sync(url)
 
     def _poll_health(self) -> None:
-        if self._health_check_running: return
+        if self._closing or self._health_check_running: return
         self._health_check_running = True
         local_url = self.config.local_base_url
 
@@ -644,24 +791,40 @@ class MainWindow(QMainWindow):
             self._health_check_running = False
             if healthy:
                 self._health_state.record(True); self.health_label.setText("Server: healthy"); self.server_console.set_state("Healthy"); return
+            if not self._server_desired_running:
+                self._health_state.reset()
+                if not self.server_manager.is_running:
+                    label = "Server: model missing" if not self._model_file().exists() else "Server: stopped"
+                    state = "Model missing" if label.endswith("missing") else "Stopped"
+                    self.health_label.setText(label); self.server_console.set_state(state)
+                return
+            started_at = self._server_started_monotonic or self.server_manager.started_at
+            if (
+                self.server_manager.is_running
+                and started_at is not None
+                and time.monotonic() - started_at < STARTUP_GRACE_SECONDS
+            ):
+                self.health_label.setText("Server: starting"); self.server_console.set_state("Starting"); return
             action = self._health_state.record(False)
             self.health_label.setText("Server: unhealthy"); self.server_console.set_state(f"Unhealthy ({self._health_state.failures} failures)")
-            if action == "restart" and (find_llama_server(self.paths, self.config.llama_server_path) and Path(self.config.model_path).exists()):
-                self._show_banner("Local server health failed twice. Restarting it once…"); self._restart_server()
+            if action == "restart":
+                self._show_banner("Local server health failed twice. Restarting it once…")
+                self._restart_server(automatic_restart=True)
             elif action == "failover" and self.config.remote_base_url:
                 self._show_banner("Local server is still unhealthy. Auto mode will offer/use cloud failover on the next request.")
 
         def failed(_error: str) -> None:
             self._health_check_running = False
 
-        self._run_background(lambda: self._sync_health(local_url), done, failed)
+        if not self._run_background(lambda: self._sync_health(local_url), done, failed):
+            self._health_check_running = False
 
     # ---------- dialogs/actions ----------
     def _show_settings(self) -> None:
         dialog = SettingsDialog(self.config, self.paths, self.credentials, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.setStyleSheet(__import__("vision_app.ui.theme", fromlist=["stylesheet"]).stylesheet(self.config.theme))
-            self.model_label.setText(Path(self.config.model_path).name)
+            self.model_label.setText(Path(self.config.model_path).name if self.config.model_path else "No model")
             self._toast("Settings saved. Some server changes apply after restart.")
 
     def _show_models(self) -> None:
@@ -674,15 +837,31 @@ class MainWindow(QMainWindow):
     def _check_model_update_async(self, dialog=None) -> None:
         def done(result) -> None:
             self._latest_remote_sha = str(getattr(result, "remote_sha", ""))
+            self._latest_remote_size = int(getattr(result, "size", 0) or 0)
             if getattr(result, "status", "") in {"different", "newer_available"}:
                 self._toast("New VISION build available")
             if dialog: dialog.set_status(f"Update check: {result.status}; remote {result.remote_sha[:12] or 'unknown'}; size {result.size}")
         self._run_background(lambda: check_for_update(self.config.installed_model_sha, self.credentials.get("HF_TOKEN")), done, lambda err: dialog.set_status(err) if dialog else None)
 
+    def _download_model_current(self, *, pending: bool) -> Path:
+        token = self.credentials.get("HF_TOKEN")
+        update = check_for_update(self.config.installed_model_sha, token)
+        if update.remote_sha:
+            self._latest_remote_sha = update.remote_sha
+        if update.size:
+            self._latest_remote_size = update.size
+        return download_model(
+            self.paths,
+            token=token,
+            revision=update.remote_sha or None,
+            pending=pending,
+            expected_size=update.size or EXPECTED_GGUF_SIZE,
+        )
+
     def _download_model_async(self, dialog=None) -> None:
         existing = Path(self.config.model_path or self.paths.model_file).exists()
         def work() -> Path:
-            return download_model(self.paths, token=self.credentials.get("HF_TOKEN"), pending=existing)
+            return self._download_model_current(pending=existing)
         def done(path: Path) -> None:
             if existing:
                 self.config.pending_model_path = str(path); self.config.pending_model_sha = self._latest_remote_sha; self.config.pending_restart = True
@@ -710,19 +889,26 @@ class MainWindow(QMainWindow):
         dialog.test_connector_requested.connect(lambda config: self._test_extension(config, dialog, connector=True))
         dialog.exec(); self._refresh_chips()
 
-    def _extension_records(self) -> list[tuple[str, McpServerConfig]]:
+    def _extension_records(self) -> tuple[list[tuple[str, McpServerConfig]], list[str]]:
         records: list[tuple[str, McpServerConfig]] = []
-        for server in load_mcp_config(self.paths.mcp_config).servers:
+        messages: list[str] = []
+        servers, errors = load_mcp_config_resilient(self.paths.mcp_config)
+        messages.extend(f"MCP record skipped: {message}" for message in errors.values())
+        connectors, connector_errors = load_connectors_resilient(self.paths.connectors_config)
+        messages.extend(f"Connector record skipped: {message}" for message in connector_errors.values())
+        for server in servers.servers:
             if server.enabled: records.append(("mcp", server))
-        for connector in load_connectors(self.paths.connectors_config).connectors:
+        for connector in connectors.connectors:
             if connector.enabled: records.append(("connector", connector_as_server(connector)))
-        return records
+        return records, messages
 
     def _refresh_extensions(self) -> None:
-        self.registry.definitions = {name: d for name, d in self.registry.definitions.items() if d.source == "builtin"}
-        self._dynamic_names.clear()
-        records = self._extension_records()
-        if not records: self._refresh_chips(); return
+        records, config_messages = self._extension_records()
+        if not records:
+            self._dynamic_names = self.registry.replace_dynamic(())
+            self._refresh_chips()
+            if config_messages: self._show_banner("Extensions: " + "; ".join(config_messages[:3]))
+            return
 
         def discover_all():
             results = []
@@ -732,7 +918,9 @@ class MainWindow(QMainWindow):
             return results
 
         def register(results) -> None:
-            messages = []
+            messages = list(config_messages)
+            definitions: list[ToolDefinition] = []
+            seen: set[str] = set()
             for _kind, record, discovery, error in results:
                 if error: messages.append(f"{record.display_name}: {error}"); continue
                 if not record.toolset_sha256:
@@ -740,8 +928,17 @@ class MainWindow(QMainWindow):
                 if discovery["fingerprint"] != record.toolset_sha256:
                     messages.append(f"{record.display_name}: toolset changed — re-approval required"); continue
                 for descriptor in discovery["tools"]:
-                    definition = make_mcp_tool_definition(record, descriptor, self.extension_host.call_tool_async)
-                    self.registry.register_dynamic(definition); self._dynamic_names.add(definition.name)
+                    try:
+                        definition = make_mcp_tool_definition(record, descriptor, self.extension_host.call_tool_async)
+                    except Exception as exc:
+                        messages.append(f"{record.display_name}: {exc}")
+                        continue
+                    if definition.name in seen:
+                        messages.append(f"{record.display_name}: duplicate tool name {definition.name} ignored")
+                        continue
+                    seen.add(definition.name)
+                    definitions.append(definition)
+            self._dynamic_names = self.registry.replace_dynamic(definitions)
             self._refresh_chips()
             if messages: self._show_banner("Extensions: " + "; ".join(messages[:3]))
 
@@ -755,32 +952,63 @@ class MainWindow(QMainWindow):
             if QMessageBox.question(self, "Trust MCP toolset?", message) != QMessageBox.StandardButton.Yes: return
             raw_config.toolset_sha256 = discovery["fingerprint"]
             raw_config.permissions = {tool.name: raw_config.permissions.get(tool.name, "ask") for tool in discovery["tools"]}
-            if connector:
-                data = load_connectors(self.paths.connectors_config); data.connectors = [raw_config if c.id == raw_config.id else c for c in data.connectors]; save_connectors(self.paths.connectors_config, data)
-            else:
-                data = load_mcp_config(self.paths.mcp_config); data.servers = [raw_config if s.id == raw_config.id else s for s in data.servers]; save_mcp_config(self.paths.mcp_config, data)
+            try:
+                # A trust save rewrites the complete extension file. Load it
+                # strictly here: saving a resilient subset would silently
+                # delete a malformed sibling record.
+                if connector:
+                    connector_data = load_connectors(self.paths.connectors_config)
+                    index = next((i for i, c in enumerate(connector_data.connectors) if c.id == raw_config.id), None)
+                    if index is None:
+                        raise LookupError("extension record no longer exists")
+                    connector_data.connectors[index] = raw_config
+                    save_connectors(self.paths.connectors_config, connector_data)
+                else:
+                    mcp_data = load_mcp_config(self.paths.mcp_config)
+                    index = next((i for i, s in enumerate(mcp_data.servers) if s.id == raw_config.id), None)
+                    if index is None:
+                        raise LookupError("extension record no longer exists")
+                    mcp_data.servers[index] = raw_config
+                    save_mcp_config(self.paths.mcp_config, mcp_data)
+            except Exception:
+                logger.exception("Could not save the trusted extension toolset")
+                message = "Could not save this toolset. The extension may have changed or its configuration needs repair."
+                if dialog: dialog.set_status(message)
+                else: self._show_banner(message)
+                return
             if dialog: dialog.set_status("Trusted toolset saved")
             self._refresh_extensions()
         self._run_background(lambda: self.extension_host.discover(config), done, lambda err: dialog.set_status(err) if dialog else self._show_banner(err))
 
     def _show_projects(self) -> None:
         dialog = ProjectsDialog(self.projects, self.paths, self)
-        dialog.changed.connect(lambda: (self._refresh_projects(), self._refresh_code_panel()))
+
+        def projects_changed() -> None:
+            self._refresh_projects()
+            self._refresh_code_panel()
+
+        dialog.changed.connect(projects_changed)
         dialog.index_requested.connect(self._index_project)
         dialog.run_profile_requested.connect(lambda project_id, name: self._run_named_profile(project_id, name))
         dialog.exec(); self._refresh_projects()
 
     def _index_project(self, project_id: str) -> None:
         def work():
-            totals = {"files": 0, "chunks": 0, "errors": []}
+            file_total = 0
+            chunk_total = 0
+            errors: list[str] = []
             for source in self.projects.list_sources(project_id, enabled_only=True):
                 try:
                     result = self.services.knowledge.index_path(project_id, Path(source["path"]))
-                    totals["files"] += result["files"]; totals["chunks"] += result["chunks"]; totals["errors"].extend(result["errors"])
-                    self.projects.mark_source_indexed(source["id"], "; ".join(result["errors"][:2]))
+                    result_errors = [str(item) for item in result.get("errors") or []]
+                    file_total += int(result.get("files") or 0)
+                    chunk_total += int(result.get("chunks") or 0)
+                    errors.extend(result_errors)
+                    self.projects.mark_source_indexed(source["id"], "; ".join(result_errors[:2]))
                 except Exception as exc:
-                    self.projects.mark_source_indexed(source["id"], str(exc)); totals["errors"].append(str(exc))
-            return totals
+                    self.projects.mark_source_indexed(source["id"], str(exc))
+                    errors.append(str(exc))
+            return {"files": file_total, "chunks": chunk_total, "errors": errors}
         self._run_background(work, lambda result: self._toast(f"Indexed {result['files']} file(s), {result['chunks']} chunk(s)"))
 
     def _run_named_profile(self, project_id: str, name: str) -> None:
@@ -806,10 +1034,17 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self); dialog.setWindowTitle("Activity & Feedback"); dialog.resize(760, 560)
         layout = QVBoxLayout(dialog); tabs = QTabWidget(dialog); layout.addWidget(tabs)
         audit = QPlainTextEdit(); audit.setReadOnly(True)
-        if self.paths.audit_log.exists(): audit.setPlainText("\n".join(self.paths.audit_log.read_text(encoding="utf-8").splitlines()[-300:]))
+        if self.paths.audit_log.exists():
+            from collections import deque
+
+            with self.paths.audit_log.open(encoding="utf-8", errors="replace") as handle:
+                audit.setPlainText("\n".join(line.rstrip("\n") for line in deque(handle, maxlen=300)))
         tabs.addTab(audit, "Audit log")
         feedback = QPlainTextEdit(); feedback.setReadOnly(True)
-        feedback.setPlainText(json.dumps(self.needs_log.read_all(), indent=2, ensure_ascii=False))
+        feedback_rows, feedback_count = self.needs_log.tail(100)
+        feedback.setPlainText(json.dumps(feedback_rows, indent=2, ensure_ascii=False))
+        if feedback_count > len(feedback_rows):
+            feedback.appendPlainText(f"… showing the latest {len(feedback_rows)} of {feedback_count} rows")
         tabs.addTab(feedback, "Feedback queue (needs.jsonl)")
         row = QHBoxLayout()
         export_button = QPushButton("Export feedback…")
@@ -818,7 +1053,11 @@ class MainWindow(QMainWindow):
         def export_feedback():
             filename, _ = QFileDialog.getSaveFileName(dialog, "Export feedback", "feedback.jsonl", "JSONL (*.jsonl)")
             if filename:
-                self.needs_log.flush(); shutil.copyfile(self.paths.needs_log, filename) if self.paths.needs_log.exists() else Path(filename).write_text("")
+                rows = self.needs_log.copy_snapshot()
+                Path(filename).write_text(
+                    "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                    encoding="utf-8",
+                )
         export_button.clicked.connect(export_feedback)
         upload_button.clicked.connect(lambda: self._run_background(lambda: upload_needs_log(self.needs_log, self.credentials.get("HF_TOKEN")), lambda ok: self._toast("Feedback uploaded" if ok else "Feedback upload failed; local queue retained")))
         def clear_feedback():
@@ -833,32 +1072,80 @@ class MainWindow(QMainWindow):
 
     def _show_wizard(self) -> None:
         def health() -> bool:
-            if not self._maybe_start_server():
+            if not self._maybe_start_server(force=True):
                 raise RuntimeError("llama-server could not be started. Open the server console for details.")
             deadline = time.time() + 120
             while time.time() < deadline:
                 if self._sync_health(self.config.local_base_url): return True
-                if self.server_manager.process is not None and self.server_manager.process.poll() is not None:
+                if not self.server_manager.is_running:
                     raise RuntimeError("llama-server exited. Open the server console for details.")
                 time.sleep(1)
             raise RuntimeError("Timed out waiting for llama-server health")
         wizard = FirstRunWizard(
             self.config, self.paths,
-            download_model=lambda: download_model(self.paths, token=self.credentials.get("HF_TOKEN")),
+            download_model=lambda: self._download_model_current(
+                pending=Path(self.config.model_path or self.paths.model_file).exists()
+            ),
             download_llama=lambda: download_llama(self.paths, "auto"),
             health_check=health,
             parent=self,
         )
-        wizard.exec(); self._maybe_start_server()
+        wizard.exec(); self._maybe_start_server(force=True)
 
     def closeEvent(self, event) -> None:
-        try:
-            self.needs_log.flush()
-            if self.config.telemetry_opt_in:
-                upload_in_background(self.needs_log, self.credentials.get("HF_TOKEN"))
-            self.chat_worker.stop()
-            self.chat_thread.quit(); self.chat_thread.wait(2000)
-            self.server_manager.stop()
-            self.extension_host.stop()
-        finally:
-            super().closeEvent(event)
+        active_background = [thread for thread, _worker in self._background if thread.isRunning()]
+        if active_background:
+            # QThread objects must not be destroyed with work still running;
+            # a large download has no safe cancellation point, so keep the
+            # window alive instead of crashing or truncating the task.
+            self._show_banner("A background task is still running. Wait for it to finish before closing VISION.")
+            event.ignore()
+            return
+
+        self._closing = True
+        health_was_active = self.health_timer.isActive()
+        system_was_active = self.system_timer.isActive()
+        self.health_timer.stop()
+        self.system_timer.stop()
+
+        def step(function) -> None:
+            try:
+                function()
+            except Exception:
+                logger.exception("A best-effort shutdown step failed")
+
+        def abort_close() -> None:
+            self._closing = False
+            self.chat_worker.resume()
+            if health_was_active:
+                self.health_timer.start()
+            if system_was_active:
+                self.system_timer.start()
+            self._show_banner("VISION is still finishing the current response. Try closing again in a moment.")
+            event.ignore()
+
+        # Stop the chat worker before starting close-only side effects such as
+        # a telemetry upload. Wait for the synchronous worker slot itself
+        # before calling QThread.quit(): quit() cannot be withdrawn, so
+        # asking first and timing out would leave a live window attached to a
+        # thread that exits as soon as the current response finishes.
+        step(self.chat_worker.prepare_shutdown)
+        deadline = time.monotonic() + 5
+        while self.chat_worker.is_running and time.monotonic() < deadline:
+            QThread.msleep(20)
+        if self.chat_worker.is_running:
+            abort_close()
+            return
+        self.chat_thread.quit()
+        if not self.chat_thread.wait(5000):
+            abort_close()
+            return
+
+        step(self.needs_log.flush)
+        if self.config.telemetry_opt_in:
+            step(lambda: upload_in_background(self.needs_log, self.credentials.get("HF_TOKEN")))
+        for timer in list(getattr(self.tool_context, "timers", []) or []):
+            step(timer.cancel)
+        step(self.server_manager.stop)
+        step(self.extension_host.stop)
+        super().closeEvent(event)

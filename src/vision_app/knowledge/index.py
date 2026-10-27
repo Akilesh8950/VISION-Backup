@@ -5,12 +5,16 @@ import os
 import re
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from .parsers import SUPPORTED_EXTENSIONS, is_secret_like, parse_file
 
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build", ".pytest_cache"}
+MAX_INDEX_FILES = 2_000
+MAX_FILE_BYTES = 10_000_000
 
 
 def _chunk_text(text: str, max_chars: int = 1400, overlap: int = 120) -> list[str]:
@@ -39,10 +43,17 @@ class KnowledgeIndex:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.db_path)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        db = sqlite3.connect(self.db_path, timeout=5.0)
         db.row_factory = sqlite3.Row
-        return db
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA busy_timeout=5000")
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def _init_db(self) -> None:
         with self._lock, self._connect() as db:
@@ -56,53 +67,84 @@ class KnowledgeIndex:
 
     @staticmethod
     def file_hash(path: Path) -> str:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _delete_path_rows(db: sqlite3.Connection, project_id: str, source: str) -> None:
+        ids = [row[0] for row in db.execute("SELECT id FROM knowledge_chunks WHERE project_id=? AND source_path=?", (project_id, source))]
+        for chunk_id in ids:
+            db.execute("DELETE FROM knowledge_fts WHERE chunk_id=?", (chunk_id,))
+        db.execute("DELETE FROM knowledge_chunks WHERE project_id=? AND source_path=?", (project_id, source))
 
     def remove_path(self, project_id: str, path: Path) -> None:
         source = str(path.resolve())
         with self._lock, self._connect() as db:
-            ids = [row[0] for row in db.execute("SELECT id FROM knowledge_chunks WHERE project_id=? AND source_path=?", (project_id, source))]
-            for chunk_id in ids:
-                db.execute("DELETE FROM knowledge_fts WHERE chunk_id=?", (chunk_id,))
-            db.execute("DELETE FROM knowledge_chunks WHERE project_id=? AND source_path=?", (project_id, source))
+            self._delete_path_rows(db, project_id, source)
 
     def index_file(self, project_id: str, path: Path, *, force: bool = False) -> int:
         path = path.expanduser().resolve()
         if is_secret_like(path):
             return 0
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        if path.stat().st_size > MAX_FILE_BYTES:
+            raise ValueError("File exceeds the 10 MB knowledge indexing limit")
         digest = self.file_hash(path)
         with self._lock, self._connect() as db:
-            existing = db.execute(
+            existing_row = db.execute(
                 "SELECT COUNT(*) FROM knowledge_chunks WHERE project_id=? AND source_path=? AND file_hash=?",
                 (project_id, str(path), digest),
-            ).fetchone()[0]
+            ).fetchone()
+            existing = int(existing_row[0]) if existing_row else 0
             if existing and not force:
-                return int(existing)
-        self.remove_path(project_id, path)
+                return existing
+
+        # Parse and chunk completely before touching the existing index. If
+        # the replacement file is corrupt, the previously indexed version
+        # remains searchable instead of being deleted first.
+        prepared: list[tuple[str, str]] = []
+        for section in parse_file(path, max_bytes=MAX_FILE_BYTES):
+            for chunk in _chunk_text(section.text):
+                prepared.append((section.locator, chunk))
+
         count = 0
         with self._lock, self._connect() as db:
-            for section in parse_file(path):
-                for chunk in _chunk_text(section.text):
-                    cursor = db.execute(
-                        "INSERT INTO knowledge_chunks(project_id,source_path,file_hash,display_name,locator,text) VALUES(?,?,?,?,?,?)",
-                        (project_id, str(path), digest, path.name, section.locator, chunk),
-                    )
-                    db.execute("INSERT INTO knowledge_fts(text,chunk_id,project_id) VALUES(?,?,?)", (chunk, int(cursor.lastrowid), project_id))
-                    count += 1
+            self._delete_path_rows(db, project_id, str(path))
+            for locator, chunk in prepared:
+                cursor = db.execute(
+                    "INSERT INTO knowledge_chunks(project_id,source_path,file_hash,display_name,locator,text) VALUES(?,?,?,?,?,?)",
+                    (project_id, str(path), digest, path.name, locator, chunk),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("SQLite did not return a knowledge chunk id")
+                db.execute("INSERT INTO knowledge_fts(text,chunk_id,project_id) VALUES(?,?,?)", (chunk, int(cursor.lastrowid), project_id))
+                count += 1
         return count
 
     def index_path(self, project_id: str, path: Path) -> dict[str, Any]:
         files: list[Path] = []
         errors: list[str] = []
+        truncated = False
         if path.is_file():
             files = [path]
         elif path.is_dir():
             for current, dirs, names in os.walk(path):
-                dirs[:] = sorted(name for name in dirs if name not in SKIP_DIRS)
+                dirs[:] = sorted(name for name in dirs if name not in SKIP_DIRS and not (Path(current) / name).is_symlink())
                 for name in sorted(names):
                     candidate = Path(current) / name
+                    if candidate.is_symlink():
+                        continue
                     if candidate.suffix.lower() in SUPPORTED_EXTENSIONS and not is_secret_like(candidate):
+                        if len(files) >= MAX_INDEX_FILES:
+                            truncated = True
+                            break
                         files.append(candidate)
+                if truncated:
+                    break
         else:
             raise FileNotFoundError(path)
         chunks = 0
@@ -111,10 +153,12 @@ class KnowledgeIndex:
                 chunks += self.index_file(project_id, file)
             except Exception as exc:
                 errors.append(f"{file}: {exc}")
-        return {"files": len(files), "chunks": chunks, "errors": errors}
+        if truncated:
+            errors.append(f"Indexing stopped after the first {MAX_INDEX_FILES} supported files")
+        return {"files": len(files), "chunks": chunks, "errors": errors, "truncated": truncated}
 
     def search(self, project_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        terms = list(dict.fromkeys(re.findall(r"[A-Za-z0-9_]{2,}", query.lower())))
+        terms = list(dict.fromkeys(re.findall(r"\w{2,}", query.lower(), flags=re.UNICODE)))
         if not terms:
             return []
         expression = " OR ".join(f'"{term}"' for term in terms[:12])

@@ -5,6 +5,8 @@ import re
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,11 +27,18 @@ class ProjectStore:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.db_path)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        db = sqlite3.connect(self.db_path, timeout=5.0)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        return db
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA busy_timeout=5000")
+            db.execute("PRAGMA foreign_keys=ON")
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def _init_db(self) -> None:
         with self._lock, self._connect() as db:
@@ -50,6 +59,33 @@ class ProjectStore:
               args_json TEXT NOT NULL DEFAULT '[]', cwd TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
               PRIMARY KEY(project_id, name));
             """)
+
+    @staticmethod
+    def _table_exists(db: sqlite3.Connection, table: str) -> bool:
+        return db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone() is not None
+
+    @classmethod
+    def _delete_knowledge(cls, db: sqlite3.Connection, project_id: str, source_path: str | None = None) -> None:
+        if not cls._table_exists(db, "knowledge_chunks"):
+            return
+        rows = db.execute(
+            "SELECT id, source_path FROM knowledge_chunks WHERE project_id=?", (project_id,)
+        ).fetchall()
+        selected: list[int] = []
+        normalized_source = ""
+        if source_path:
+            normalized_source = str(Path(source_path).expanduser().resolve()).replace("\\", "/").casefold().rstrip("/")
+        for row in rows:
+            chunk_path = str(row[1]).replace("\\", "/").casefold()
+            if not normalized_source or chunk_path == normalized_source or chunk_path.startswith(normalized_source + "/"):
+                selected.append(int(row[0]))
+        if cls._table_exists(db, "knowledge_fts"):
+            for chunk_id in selected:
+                db.execute("DELETE FROM knowledge_fts WHERE chunk_id=?", (chunk_id,))
+        for chunk_id in selected:
+            db.execute("DELETE FROM knowledge_chunks WHERE id=?", (chunk_id,))
 
     def create_project(self, name: str, root_path: Path, instructions: str = "") -> str:
         project_id = uuid.uuid4().hex
@@ -79,20 +115,24 @@ class ProjectStore:
             return [dict(row) for row in db.execute(query)]
 
     def update_project(self, project_id: str, **fields: Any) -> None:
-        allowed = {"name": "name", "root_path": "root_path", "instructions": "instructions", "archived": "archived"}
-        assignments, values = [], []
-        for key, column in allowed.items():
-            if key in fields:
-                assignments.append(f"{column}=?")
-                values.append(int(fields[key]) if key == "archived" else fields[key])
-        if not assignments:
+        if not any(key in fields for key in ("name", "root_path", "instructions", "archived")):
             return
-        values.extend([_now(), project_id])
         with self._lock, self._connect() as db:
-            db.execute(f"UPDATE projects SET {', '.join(assignments)}, updated_at=? WHERE id=?", values)
+            if "name" in fields:
+                db.execute("UPDATE projects SET name=? WHERE id=?", (fields["name"], project_id))
+            if "root_path" in fields:
+                db.execute("UPDATE projects SET root_path=? WHERE id=?", (fields["root_path"], project_id))
+            if "instructions" in fields:
+                db.execute("UPDATE projects SET instructions=? WHERE id=?", (fields["instructions"], project_id))
+            if "archived" in fields:
+                db.execute("UPDATE projects SET archived=? WHERE id=?", (int(fields["archived"]), project_id))
+            db.execute("UPDATE projects SET updated_at=? WHERE id=?", (_now(), project_id))
 
     def delete_project(self, project_id: str) -> None:
         with self._lock, self._connect() as db:
+            self._delete_knowledge(db, project_id)
+            if self._table_exists(db, "conversations"):
+                db.execute("UPDATE conversations SET project_id=NULL WHERE project_id=?", (project_id,))
             db.execute("DELETE FROM projects WHERE id=?", (project_id,))
             db.execute("DELETE FROM project_sources WHERE project_id=?", (project_id,))
             db.execute("DELETE FROM project_extensions WHERE project_id=?", (project_id,))
@@ -136,6 +176,11 @@ class ProjectStore:
 
     def remove_source(self, source_id: str) -> None:
         with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT project_id, path FROM project_sources WHERE id=?", (source_id,)
+            ).fetchone()
+            if row is not None:
+                self._delete_knowledge(db, str(row[0]), str(row[1]))
             db.execute("DELETE FROM project_sources WHERE id=?", (source_id,))
 
     def mark_source_indexed(self, source_id: str, error: str = "") -> None:

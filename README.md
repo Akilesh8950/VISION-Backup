@@ -22,6 +22,17 @@ available as a rollback and advanced-management surface with `--qt`.
 
 ## Install on Windows
 
+**System requirements**
+
+- Windows 10/11 (64-bit), ~7 GB free disk space for the app + model.
+- **Minimum (Low-end CPU mode):** Intel i3-class CPU (4 threads), 8 GB RAM,
+  no graphics card required. Settings → Model → Performance → *Automatic*
+  detects such PCs and switches to Low-end CPU mode (CPU-only, smaller
+  context, compressed memory). The app stays responsive; answers generate
+  at a few tokens per second.
+- **Recommended:** 16 GB RAM and a GPU with 8 GB+ VRAM for fast answers at
+  the full 16k context.
+
 For the normal end-user installation, build or download the Inno Setup
 installer and follow [docs/INSTALLATION.md](docs/INSTALLATION.md). The
 recommended choices are **current user only** → **Portable folder** → a
@@ -84,14 +95,13 @@ On first launch, the setup sheet can:
 3. set GPU layers;
 4. start the local server and wait for `/v1/models` health.
 
-You can skip setup and configure paths manually in **Settings → Model &
-server**.
+You can skip setup and configure paths manually in **Settings → Model**.
 
 Useful launch forms:
 
 ```powershell
 python -m vision_app          # default WebView2 interface
-python -m vision_app --debug  # WebView2 interface with pywebview debug enabled
+python -m vision_app --debug  # source-only pywebview debug (ignored when frozen)
 python -m vision_app --qt     # legacy PySide6 rollback interface
 ```
 
@@ -102,7 +112,7 @@ graphite/ivory design system inspired by the quiet reading layout of modern
 chat products:
 
 - React 19.3.1, React DOM 19.3.1 and Chart.js 4.6.1;
-- Vite 5.4.19 with `@vitejs/plugin-react` 4.3.4 for development builds;
+- Vite 8.3.5 with `@vitejs/plugin-react` 6.1.2 for development builds;
 - custom inline SVG icons and VISION mark — no emoji chrome or icon font;
 - flat solid surfaces and solid chart colors — no CSS or canvas gradients in
   VISION-authored frontend code;
@@ -113,12 +123,27 @@ chat products:
 - `app/web/screenshots.html` redirects to the built-in `?gallery=1` review
   mode, and `docs/screenshots/` contains static review captures.
 
+The premium reading/chat surface remains the focal point. Settings and other
+secondary sheets intentionally use a quieter, simpler layout: Settings is a
+tabbed sheet (General, Model, Tools, Library, Privacy, Updates, About), with paths,
+addresses, diagnostics and other technical controls collapsed under
+**Advanced**. The main 260 px conversation sidebar collapses to a remembered
+64 px icon rail when the VISION logo is clicked. It keeps Pinned chats first,
+groups chats under collapsible Projects, filters by project, virtualizes long
+histories, auto-names a chat from its first exchange, and exposes rename,
+pin, move-to-project and delete actions from each row. Uploaded files persist
+in the Item Library with thumbnails/type icons, sizes and used-in-chats
+counts; supported text files up to 256 KB can be re-attached to a message.
+Settings → Updates independently tracks App, Model, and Config: app packages
+are hash-verified and staged for an explicit restart, models activate on the
+next launch, and validated configuration can apply live.
+
 After the model/server have been downloaded, disconnecting the network must
 not blank or degrade the interface.
 
 #### Frontend development
 
-Use Node 20+ only when changing the UI:
+Use Node 20.19+ (or 22.12+) only when changing the UI:
 
 ```powershell
 cd app\frontend
@@ -129,7 +154,7 @@ python -m vision_app
 ```
 
 `npm ci` uses the committed lockfile; `--legacy-peer-deps` matches the
-validated Vite 5 / plugin peer resolution in this repository. The build
+validated Vite 8 / plugin peer resolution in this repository. The build
 cleans and rewrites `app\web` with relative `./assets/...` paths. Commit the
 generated `app\web` output with any React source change so source and
 packaged launches remain Node-free.
@@ -177,11 +202,14 @@ Portable mode is selected by the installer (or portable ZIP) when a frozen
 Path precedence is `VISION_HOME` first, then frozen portable mode, then the
 standard OS locations. Relative tool paths resolve in the active workspace.
 Writes show the resolved absolute path and ask for confirmation outside the
-workspace. Settings shows the active installation mode and exact folders.
+workspace. Settings → Privacy shows the active installation mode; exact
+folders are under its collapsed storage-location details.
 
 Secrets are never stored in JSON config files. HF tokens, remote endpoint keys
 and MCP/connector credentials use Windows Credential Manager on Windows, even
-in portable mode.
+in portable mode. The web bridge reports only whether a secret is stored; it
+never sends a saved secret value—or the saved backup-service address—back to
+the renderer. Secret and connection fields are write-only replacements.
 
 ## What is included
 
@@ -193,6 +221,8 @@ in portable mode.
 - Ctrl+K command palette, Ctrl+Enter regenerate, and Esc to cancel a stream
 - LOCAL/CLOUD endpoint chip, health/failover banner and a server console sheet
 - text attachments, `/fix`, `/teach`, thumbs-down feedback and export
+- persistent Item Library for uploaded files, with managed local copies,
+  deduplication, thumbnails/type icons, rename/delete and used-in-chats counts
 - SQLite history and persistent memory keys
 
 ### Tools
@@ -239,7 +269,7 @@ skill-name/
 ```
 
 `SKILL.md` begins with YAML frontmatter containing at least `name` and
-`description`. Imports accepted in **Settings → Extensions**:
+`description`. Imports accepted in **Settings → Tools**:
 
 - a canonical folder;
 - a lone `SKILL.md`;
@@ -256,7 +286,7 @@ Full instructions load when the user selects a skill or the model calls
 
 VISION is an MCP host for stdio and Streamable HTTP servers. Legacy SSE is
 available as a transport record if a named server requires it. In the web
-interface, open **Settings → Extensions**, run **Discover / trust** for a
+interface, open **Settings → Tools**, run **Discover / trust** for a
 configured server, review the tool list and fingerprint, then explicitly trust
 that toolset. Server/connector record editing remains available in the legacy
 `--qt` surface and the JSON files under `%LOCALAPPDATA%\VISION\extensions\`.
@@ -293,16 +323,28 @@ copy as `feedback.jsonl`, but the app/HF canonical name remains
 Each row contains exactly:
 
 ```json
-{"ts":"...","category":"...","prompt":"...","model_output":"...","signal":"...","detail":"..."}
+{"ts":"...","session_id":"...","app_version":"1.0.0","model_sha":"...","signal":"...","category":"...","prompt":"...","model_output":"...","detail":{}}
 ```
 
-Signals include `tool_schema_error`, `tool_runtime_error`, `code_error`,
-`user_negative` and `topic_usage`. Secrets are redacted, file/clipboard
-contents are excluded, and upload is opt-in/default OFF. When enabled, queued
-rows append-merge into `SpiritKing/VISION-v2-Agent-Dataset` at
-`telemetry/needs.jsonl` in a background thread; local rows clear only after a
-confirmed successful upload. A token with write access to that dataset is
-required.
+Signals are `tool_schema_error`, `tool_runtime_error`, `code_error`, and
+`user_negative` (`topic_usage` is a legacy counter that is no longer
+emitted — successful chats are not recorded). Tool schema failures keep
+sanitized `raw_arguments` plus the validation error; runtime/code failures
+keep the traceback; `/fix` and `/teach` store the correction as
+`detail.target`. API keys/HF tokens and
+absolute user paths are redacted (paths become `<PATH:basename>`), model
+output is truncated to 2,000 characters, and the local queue is capped at
+2,000 events / 5 MB, dropping lowest-value signals first and user
+corrections last. Every flush rewrites the
+local aggregate `telemetry\report.json`.
+
+Upload is opt-in/default OFF. When enabled, the shared sync scheduler
+uploads rows as a timestamped shard into
+`SpiritKing/VISION-v2-Agent-Dataset` under `telemetry/inbox/` and overwrites
+`telemetry/report.json`, using only the HF token stored in Windows Credential
+Manager. Local rows clear only after confirmed success; offline rows stay
+queued. Settings → Privacy provides the opt-in toggle, an exact upload
+preview, local clear, pending count, and last-upload status.
 
 ## Build a Windows executable
 
@@ -325,15 +367,25 @@ dist\VISION\VISION.exe
 ```
 
 The script uses a one-folder PyInstaller build, `assets\vision.ico` and
-`assets\version_info.txt`. It bundles the committed React production output
-from `app\web` and fails if `app\web\index.html` is missing from the output.
-Node is not invoked by the default `build.ps1` path; it verifies that
+`assets\version_info.txt`. Application Python modules are stored as optimized
+compiled bytecode in the PyInstaller archive, windowed fatal-error tracebacks
+are disabled, and the bundled frontend is the minified production output with
+source maps disabled. The script fails packaging if frontend source files or
+`.map` files leak into `app\web`, or if an application source tree appears in
+the output. It also fails if `app\web\index.html` is missing. Node is not
+invoked by the default `build.ps1` path; it verifies that
 `app\web\index.html` and every referenced JS/CSS asset exist before and
 after packaging. If you changed `app\frontend\src`, run the frontend build
 above first (or pass `-BuildFrontend`) and include the regenerated
 `app\web` output in the same commit. Launch the packaged EXE from outside the repository to
 prove that it is not accidentally reading frontend files from the source
 tree.
+
+These release measures prevent casual inspection and accidental secret/source
+leakage; they cannot make code running on a user's own PC mathematically
+impossible to reverse-engineer. Real secret protection comes from Credential
+Manager storage, bridge payload minimization, redaction, and never embedding
+owner/service secrets in the app.
 
 For the distributable Windows setup, use the Inno Setup wrapper instead:
 
@@ -344,7 +396,8 @@ For the distributable Windows setup, use the Inno Setup wrapper instead:
 ```
 
 The installer asks current-user vs all-users, then Portable vs Standard data,
-then the destination folder. See
+then the destination folder. `build_installer.ps1` repeats the bundled-web
+source/source-map check before compiling setup. See
 [docs/INSTALLATION.md](docs/INSTALLATION.md) for the complete owner/end-user
 tutorial, moving/backup/update/uninstall steps, silent install forms, and
 troubleshooting.
@@ -410,7 +463,9 @@ tool-call stream.
 ### Blank window or WebView2 will not start
 
 - Confirm the Microsoft Edge WebView2 Runtime is installed.
-- Run `python -m vision_app --debug` and capture the console error.
+- From a source checkout, run `python -m vision_app --debug` and capture the
+  console error. Frozen release builds intentionally ignore `--debug` so
+  end-user installs do not expose WebView developer tooling.
 - From the source tree, confirm `app\web\index.html` and its referenced
   `./assets/*.js` / `./assets/*.css` files exist. If the frontend was just
   changed, rebuild it with the Node commands above. For a custom layout, set
@@ -422,7 +477,7 @@ tool-call stream.
 
 - Open **Server** in the sidebar (or Ctrl+K → “Server console”) and read the
   last lines.
-- Lower **Settings → GPU layers** from 99 (for example 30, 20 or 0) and restart.
+- Lower **Settings → Model → Graphics processing** from 99 (for example 30, 20 or 0) and restart.
 - Confirm the model path points to the complete 5.24 GiB GGUF.
 - For CUDA builds, make sure the llama.cpp build and matching CUDA runtime
   files came from the same release. Vulkan is the smaller vendor-neutral
@@ -435,7 +490,7 @@ tool-call stream.
 
 ### Port 8080 is already in use
 
-VISION never kills another process. Change **Settings → Local port**, or stop
+VISION never kills another process. Change **Settings → Model → Advanced model settings → Local port**, or stop
 the other service yourself and restart VISION's server.
 
 ### Antivirus blocks downloads or `llama-server.exe`
@@ -443,14 +498,17 @@ the other service yourself and restart VISION's server.
 Unsigned local ML executables and large downloads can be quarantined. Download
 only from the official release/Hugging Face locations configured by the app,
 restore only files you expected, and verify the model size/path in
-**Settings → Model & server**. A code-signed production installer is outside
+**Settings → Model**. A code-signed production installer is outside
 this source build.
 
 ### Cloud failover does not work
 
 - The remote URL should normally end in `/v1`.
 - `GET /v1/models` must succeed.
-- If the service needs a key, set **Remote Bearer key** in Settings.
+- Settings intentionally does not redisplay the saved service address; leave
+  the field blank to keep it, type a replacement to change it, or use **Clear
+  saved backup address** to remove it.
+- If the service needs a key, set the backup connection key under Settings → Model → Backup connection.
 - Local mode does not silently fall back; choose Auto for automatic failover
   after two local health failures.
 
@@ -463,7 +521,7 @@ this source build.
 
 ### A skill does not activate
 
-- Enable it in **Settings → Extensions** and save settings.
+- Enable it in **Settings → Tools** and save settings.
 - Validate that the folder name equals frontmatter `name`.
 - Use `/skill-name` or `@skill-name` for explicit activation.
 - Skills containing non-Python executables may only partially work by design.

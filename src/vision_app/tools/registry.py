@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
+import threading
 import time
+import traceback
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -11,6 +14,9 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from ..constants import SAFETY_BLOCK_MESSAGE
+
+# Agent mode never auto-approves these, even for builtin tools.
+_AGENT_NEVER_AUTO_APPROVE = {"open_path", "open_app"}
 from ..logging_setup import AuditLog
 from ..redaction import redact_value
 from ..transport.schemas import ToolCall
@@ -18,6 +24,7 @@ from . import code_files, genui_tools, live_data, memory, schemas, web_reader, w
 from .context import ToolContext
 
 Handler = Callable[[Any, ToolContext], Any | Awaitable[Any]]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,11 @@ class ToolExecutionResult:
     duration_ms: float = 0.0
     source: str = "builtin"
     arguments: dict[str, Any] = field(default_factory=dict)
+    # Backend-only diagnostics for the local telemetry queue.  Bridge payload
+    # builders deliberately do not serialize these fields to the frontend.
+    raw_arguments: str = ""
+    validation_error: str = ""
+    traceback_text: str = ""
 
 
 def _without_context(function):
@@ -76,6 +88,13 @@ def _skill_load(args: schemas.SkillLoadArgs, context: ToolContext) -> dict:
     return context.skill_loader(args.name)
 
 
+def _read_skill_file(args: schemas.ReadSkillFileArgs, context: ToolContext) -> dict:
+    if context.skill_resource_reader is None:
+        raise RuntimeError("Skill files are not available for this conversation")
+    content = context.skill_resource_reader(args.skill, args.path)
+    return {"skill": args.skill, "path": args.path, "content": content}
+
+
 SIDE_EFFECTS = {
     "write_file": "write", "run_python": "execute", "memory_set": "write",
     "open_app": "launch", "open_path": "launch", "open_url": "launch",
@@ -87,7 +106,41 @@ class ToolRegistry:
     def __init__(self, audit_log: AuditLog | None = None):
         self.audit_log = audit_log
         self.definitions: dict[str, ToolDefinition] = {}
+        # Remote config may refresh only the model-facing description and
+        # JSON schema for the 27 baseline tools.  Local Pydantic models and
+        # handlers remain authoritative for validation and execution.
+        self._schema_overrides: dict[str, dict[str, Any]] = {}
+        self._schema_overrides_lock = threading.RLock()
+        # Extension tools set to "ask" prompt once per app session; the
+        # approval is remembered here (never persisted) so a long agent
+        # run is not interrupted for every repeated call.
+        self._session_approved: set[tuple[str, str]] = set()
+        self._session_approved_lock = threading.Lock()
         self._register_builtins()
+
+    def apply_schema_overrides(self, tools: Any) -> None:
+        replacement: dict[str, dict[str, Any]] = {}
+        for tool in tools or []:
+            if isinstance(tool, dict):
+                name = str(tool.get("name") or "")
+                description = str(tool.get("description") or "")
+                parameters = tool.get("parameters")
+            else:
+                name = str(getattr(tool, "name", "") or "")
+                description = str(getattr(tool, "description", "") or "")
+                parameters = getattr(tool, "parameters", None)
+            if name not in schemas.ORIGINAL_27_TOOLS or not isinstance(parameters, dict):
+                continue
+            replacement[name] = {
+                "description": description[:2_000],
+                "parameters": parameters,
+            }
+        # Apply all-or-nothing: a partial remote set must not mix two schema
+        # generations in one model request.
+        if set(replacement) != set(schemas.ORIGINAL_27_TOOLS):
+            return
+        with self._schema_overrides_lock:
+            self._schema_overrides = replacement
 
     def _add(self, name: str, handler: Handler) -> None:
         self.definitions[name] = ToolDefinition(
@@ -129,6 +182,7 @@ class ToolRegistry:
             "set_timer": _with_context(windows_tools.set_timer),
             "read_url": _without_context(web_reader.read_url),
             "skill_load": _skill_load,
+            "read_skill_file": _read_skill_file,
         }
         for name, handler in handlers.items():
             self._add(name, handler)
@@ -145,6 +199,26 @@ class ToolRegistry:
             if definition.source != source or definition.source == "builtin"
         }
 
+    def replace_dynamic(self, definitions: list[ToolDefinition]) -> set[str]:
+        """Atomically swap all dynamic definitions after discovery finishes."""
+
+        builtins = {
+            name: definition
+            for name, definition in self.definitions.items()
+            if definition.source == "builtin"
+        }
+        replacement = dict(builtins)
+        names: set[str] = set()
+        for definition in definitions:
+            if definition.source == "builtin" or definition.name in builtins:
+                raise ValueError(f"Dynamic tool cannot shadow built-in tool: {definition.name}")
+            if definition.name in names:
+                raise ValueError(f"Duplicate dynamic tool name: {definition.name}")
+            names.add(definition.name)
+            replacement[definition.name] = definition
+        self.definitions = replacement
+        return set(names)
+
     def openai_tools(
         self,
         *,
@@ -152,13 +226,27 @@ class ToolRegistry:
         include_skill_load: bool = False,
         dynamic_names: set[str] | None = None,
     ) -> list[dict[str, Any]]:
+        with self._schema_overrides_lock:
+            overrides = dict(self._schema_overrides)
+
+        def schema_for(name: str) -> dict[str, Any]:
+            schema = self.definitions[name].openai_schema()
+            override = overrides.get(name)
+            if override:
+                function = schema.setdefault("function", {})
+                if override.get("description"):
+                    function["description"] = override["description"]
+                function["parameters"] = override["parameters"]
+            return schema
+
         tools: list[dict[str, Any]] = []
         for name in schemas.ORIGINAL_27_TOOLS:
-            tools.append(self.definitions[name].openai_schema())
+            tools.append(schema_for(name))
         if include_read_url:
-            tools.append(self.definitions["read_url"].openai_schema())
+            tools.append(schema_for("read_url"))
         if include_skill_load:
-            tools.append(self.definitions["skill_load"].openai_schema())
+            tools.append(schema_for("skill_load"))
+            tools.append(schema_for("read_skill_file"))
         for name, definition in self.definitions.items():
             if definition.source == "builtin":
                 continue
@@ -168,9 +256,13 @@ class ToolRegistry:
         return tools
 
     def _audit(self, result: ToolExecutionResult) -> None:
-        if self.audit_log:
+        if not self.audit_log:
+            return
+        try:
             status = result.error_kind or ("ok" if not result.is_error else "error")
             self.audit_log.write(result.name, result.arguments, status, result.duration_ms, source=result.source)
+        except Exception:
+            logger.exception("Could not write the tool audit record for %s", result.name)
 
     def _make_error(
         self,
@@ -183,7 +275,13 @@ class ToolRegistry:
         args: dict[str, Any] | None = None,
         started: float | None = None,
         source: str = "builtin",
+        raw_arguments: str = "",
+        validation_error: str = "",
+        traceback_text: str = "",
     ) -> ToolExecutionResult:
+        if not raw_arguments:
+            supplied = getattr(getattr(call, "function", None), "arguments", "")
+            raw_arguments = supplied if isinstance(supplied, str) else json.dumps(supplied, ensure_ascii=False, default=str)
         result = ToolExecutionResult(
             tool_call_id=call.id,
             name=name,
@@ -195,6 +293,9 @@ class ToolRegistry:
             duration_ms=((time.perf_counter() - started) * 1000) if started else 0.0,
             source=source,
             arguments=args or {},
+            raw_arguments=raw_arguments,
+            validation_error=validation_error,
+            traceback_text=traceback_text,
         )
         self._audit(result)
         return result
@@ -248,8 +349,9 @@ class ToolRegistry:
     @staticmethod
     def _summary(name: str, raw: Any) -> str:
         if isinstance(raw, dict):
-            if "_genui" in raw:
-                return f"Rendered {raw['_genui'].get('kind', 'widget')}"
+            genui = raw.get("_genui")
+            if isinstance(genui, dict):
+                return f"Rendered {genui.get('kind', 'widget')}"
             if name == "get_weather":
                 return f"{raw.get('city', '')}: {raw.get('temperature')} {raw.get('temperature_unit', '')}, {raw.get('condition', '')}".strip()
             if name == "run_python":
@@ -261,7 +363,7 @@ class ToolRegistry:
         text = ToolRegistry._serialise(raw)
         return text[:240] + ("…" if len(text) > 240 else "")
 
-    async def execute(self, call: ToolCall, context: ToolContext) -> ToolExecutionResult:
+    async def _execute_once(self, call: ToolCall, context: ToolContext) -> ToolExecutionResult:
         started = time.perf_counter()
         name = call.function.name.strip()
         raw_args = call.function.arguments or "{}"
@@ -278,6 +380,7 @@ class ToolRegistry:
                 kind="tool_schema_error",
                 validation=True,
                 started=started,
+                validation_error=str(exc),
             )
 
         if definition is None:
@@ -297,12 +400,29 @@ class ToolRegistry:
                 kind="blocked", args=parsed_args, started=started, source=definition.source,
             )
         if definition.permission == "ask":
-            approved = context.require_confirmation(
-                f"Allow {name}?",
-                f"Source: {definition.source}\nArguments:\n{json.dumps(redact_value(parsed_args), indent=2, ensure_ascii=False)}",
-                {"tool": name, "source": definition.source, "arguments": parsed_args},
-            )
-            if not approved:
+            approval_key = (definition.source, name)
+            with self._session_approved_lock:
+                remembered = approval_key in self._session_approved
+            if remembered:
+                approved = True
+            elif (
+                getattr(context, "agent_auto_approve", False)
+                and definition.source == "builtin"
+                and name not in _AGENT_NEVER_AUTO_APPROVE
+            ):
+                logger.info("Agent mode auto-approved builtin tool %s", name)
+                approved = True
+            else:
+                approved = await asyncio.to_thread(
+                    context.require_confirmation,
+                    f"Allow {name}?",
+                    f"Source: {definition.source}\nArguments:\n{json.dumps(redact_value(parsed_args), indent=2, ensure_ascii=False, default=str)}",
+                    {"tool": name, "source": definition.source, "arguments": parsed_args},
+                )
+            if approved:
+                with self._session_approved_lock:
+                    self._session_approved.add(approval_key)
+            else:
                 return self._make_error(
                     call, name, "User declined this tool call. Continue without it or ask how to proceed.",
                     kind="blocked", args=parsed_args, started=started, source=definition.source,
@@ -326,6 +446,7 @@ class ToolRegistry:
                     args=parsed_args,
                     started=started,
                     source=definition.source,
+                    validation_error=details,
                 )
 
         try:
@@ -344,10 +465,12 @@ class ToolRegistry:
             return self._make_error(
                 call, name, f"Tool {name} failed: {exc}", kind="tool_runtime_error",
                 args=parsed_args, started=started, source=definition.source,
+                traceback_text=traceback.format_exc(),
             )
 
         raw_with_sources, sources = self._assign_sources(raw, context)
-        genui = raw_with_sources.get("_genui") if isinstance(raw_with_sources, dict) else None
+        raw_genui = raw_with_sources.get("_genui") if isinstance(raw_with_sources, dict) else None
+        genui = raw_genui if isinstance(raw_genui, dict) else None
         content = self._serialise(raw_with_sources)
         if genui:
             content = f"Rendered a native {genui.get('kind')} widget for the user titled '{genui.get('title') or genui.get('filename') or ''}'."
@@ -369,9 +492,48 @@ class ToolRegistry:
             duration_ms=(time.perf_counter() - started) * 1000,
             source=definition.source,
             arguments=parsed_args,
+            raw_arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args, ensure_ascii=False, default=str),
         )
         self._audit(result)
         return result
+
+    async def execute(self, call: ToolCall, context: ToolContext) -> ToolExecutionResult:
+        """Execute one call while preserving the always-reply invariant.
+
+        Confirmation, source assignment, serialization, summary creation and
+        auditing all sit after the assistant tool-call has been persisted by
+        the controller. An ordinary exception in any of them must therefore
+        become a tool error result, not escape and orphan the call.
+        Cancellation is deliberately not converted: the controller owns the
+        user-visible cancelled-turn state.
+        """
+
+        started = time.perf_counter()
+        try:
+            return await self._execute_once(call, context)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Unhandled tool registry failure")
+            try:
+                name = str(call.function.name or "unknown").strip() or "unknown"
+            except Exception:
+                name = "unknown"
+            definition = self.definitions.get(name) if "name" in locals() else None
+            result = ToolExecutionResult(
+                tool_call_id=str(getattr(call, "id", "") or ""),
+                name=name,
+                content_for_model=f"Tool {name} failed: {exc}",
+                summary=f"Tool {name} failed: {exc}",
+                is_error=True,
+                error_kind="tool_runtime_error",
+                duration_ms=(time.perf_counter() - started) * 1000,
+                source=definition.source if definition else "builtin",
+                raw_arguments=str(getattr(getattr(call, "function", None), "arguments", "") or ""),
+                traceback_text=traceback.format_exc(),
+            )
+            self._audit(result)
+            return result
 
     async def execute_many(
         self, calls: list[ToolCall], context: ToolContext

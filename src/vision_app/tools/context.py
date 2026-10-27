@@ -23,9 +23,14 @@ class ToolContext:
     conversation_id: str = ""
     confirm: ConfirmCallback | None = None
     auto_approve_python: bool = False
+    # Agentic mode: registry-level "ask" prompts for safe builtin tools are
+    # auto-approved.  Tool-level safety confirmations (outside-workspace
+    # writes, executable opens, huge clipboard sets) still always ask.
+    agent_auto_approve: bool = False
     timer_callback: TimerCallback | None = None
     checkpoint_callback: CheckpointCallback | None = None
     skill_loader: Callable[[str], dict[str, Any]] | None = None
+    skill_resource_reader: Callable[[str, str], str] | None = None
     allow_writes_outside_workspace: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
     timers: list[threading.Timer] = field(default_factory=list)

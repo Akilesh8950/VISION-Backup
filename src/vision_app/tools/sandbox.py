@@ -1,24 +1,43 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
-SYSTEM_PREFIXES_WINDOWS = ("c:\\windows", "c:\\program files", "c:\\program files (x86)")
 SYSTEM_PREFIXES_POSIX = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys", "/dev")
 EXECUTABLE_SUFFIXES = {".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".ps1", ".vbs", ".js"}
+_WINDOWS_SYSTEM_FOLDERS = ("windows", "program files", "program files (x86)", "programdata")
+_WINDOWS_ROOT_ENV_VARS = ("SystemRoot", "WINDIR", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData")
 
 
-def _norm(value: str) -> str:
-    return value.replace("/", "\\").lower() if ":\\" in value or "\\" in value else value.lower()
+def _at_or_under(value: str, prefix: str, separator: str) -> bool:
+    clean_prefix = prefix.rstrip(separator)
+    return value == clean_prefix or value.startswith(clean_prefix + separator)
+
+
+def _windows_normalized(value: str) -> str:
+    return value.replace("/", "\\").lower().rstrip("\\")
 
 
 def is_system_path(path: str | Path) -> bool:
     text = str(path)
-    lower = text.lower().replace("/", "\\")
-    if any(lower.startswith(prefix) for prefix in SYSTEM_PREFIXES_WINDOWS):
-        return True
+    windows_text = _windows_normalized(text)
+
+    # The actual installation may live on a drive other than C:. Prefer the
+    # roots Windows itself reports, then retain drive-agnostic checks for the
+    # conventional system directory names.
+    for env_name in _WINDOWS_ROOT_ENV_VARS:
+        root = os.environ.get(env_name)
+        if root and _at_or_under(windows_text, _windows_normalized(root), "\\"):
+            return True
+    drive_match = re.match(r"^([a-z]:\\)(.+)$", windows_text)
+    if drive_match:
+        first_part = drive_match.group(2).split("\\", 1)[0]
+        if first_part in _WINDOWS_SYSTEM_FOLDERS:
+            return True
+
     posix = "/" + text.strip("/").lower() if text.startswith("/") else text.lower()
-    return any(posix == prefix or posix.startswith(prefix + "/") for prefix in SYSTEM_PREFIXES_POSIX)
+    return any(_at_or_under(posix, prefix, "/") for prefix in SYSTEM_PREFIXES_POSIX)
 
 
 def has_parent_reference(raw: str) -> bool:

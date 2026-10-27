@@ -16,4 +16,9 @@ def test_connector_round_trip_and_server_conversion(tmp_path):
     save_connectors(path, ConnectorConfigFile(connectors=[connector]))
     loaded = load_connectors(path).connectors[0]
     assert loaded.auth_type == "bearer"
-    assert connector_as_server(loaded).url == "https://example.com/mcp"
+    converted = connector_as_server(loaded)
+    assert converted.url == "https://example.com/mcp"
+    # Stored MCP and connector IDs have separate namespaces. Their live MCP
+    # sessions must not collide if both records use the same stored ID.
+    assert converted.id == "connector-notes"
+    assert loaded.id == "notes"

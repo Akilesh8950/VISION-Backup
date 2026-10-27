@@ -34,11 +34,11 @@ class DiffWidget(QFrame):
         font = QFont("Cascadia Code")
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.table.setFont(font)
-        for row_index, (tag, left_no, left, right_no, right) in enumerate(rows):
+        for row_index, (row_tag, left_no, left, right_no, right) in enumerate(rows):
             values = [left_no, left, right_no, right]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if tag != "equal":
+                if row_tag != "equal":
                     if column in (0, 1) and left:
                         item.setBackground(QColor("#5a2020"))
                     if column in (2, 3) and right:

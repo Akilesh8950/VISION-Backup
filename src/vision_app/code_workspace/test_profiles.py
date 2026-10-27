@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
+
+from ..subprocess_utils import run_bounded
 
 
 def _environment() -> dict[str, str]:
@@ -16,21 +17,19 @@ def run_test_profile(profile: dict, timeout: float = 300.0) -> dict:
     if not program:
         raise ValueError("Test profile has no program")
     cwd = Path(str(profile.get("cwd") or ".")).expanduser()
-    completed = subprocess.run(
+    if not cwd.is_dir():
+        raise FileNotFoundError(f"Test profile working directory does not exist: {cwd}")
+    completed = run_bounded(
         [program, *args],
-        cwd=str(cwd),
+        cwd=cwd,
         env=_environment(),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=timeout,
-        check=False,
-        shell=False,
+        stdout_chars=50_000,
+        stderr_chars=50_000,
     )
     return {
         "exit_code": completed.returncode,
-        "stdout": (completed.stdout or "")[-50_000:],
-        "stderr": (completed.stderr or "")[-50_000:],
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
         "command": [program, *args],
     }

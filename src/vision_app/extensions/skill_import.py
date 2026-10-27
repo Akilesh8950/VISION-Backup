@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .skills import SkillPackage, parse_skill_dir, parse_skill_text
+from .skills import MAX_SKILL_MD_BYTES, SkillPackage, parse_skill_dir, parse_skill_text
 
 MAX_ARCHIVE_BYTES = 30 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
@@ -63,7 +64,21 @@ def _extract_archive(archive: Path, destination: Path) -> Path:
             target = (destination / Path(*parts)).resolve() if parts else root
             if target != root and root not in target.parents:
                 raise ValueError(f"Unsafe path in skill archive: {info.filename}")
-        zf.extractall(destination)
+        actual_total = 0
+        for info in infos:
+            normalized = info.filename.replace("\\", "/")
+            parts = [part for part in normalized.split("/") if part not in ("", ".")]
+            target = (destination / Path(*parts)).resolve() if parts else root
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as source, target.open("wb") as output:
+                while chunk := source.read(1024 * 1024):
+                    actual_total += len(chunk)
+                    if actual_total > MAX_UNCOMPRESSED_BYTES:
+                        raise ValueError("Skill archive expands beyond the 100 MB limit")
+                    output.write(chunk)
     return destination
 
 
@@ -84,6 +99,33 @@ def _convert_plain_markdown(text: str, name: str, description: str) -> str:
     return f"---\nname: {name}\ndescription: {safe_description}\n---\n\n{text.lstrip()}"
 
 
+def _validate_source_tree(source: Path) -> None:
+    file_count = 0
+    total_bytes = 0
+    for current, dirs, names in os.walk(source):
+        current_path = Path(current)
+        for directory in dirs:
+            if (current_path / directory).is_symlink():
+                raise ValueError("Symlinks are not allowed in skill folder imports")
+        for name in names:
+            candidate = current_path / name
+            if candidate.is_symlink():
+                raise ValueError("Symlinks are not allowed in skill folder imports")
+            file_count += 1
+            if file_count > MAX_FILES:
+                raise ValueError("Skill folder contains too many files")
+            total_bytes += candidate.stat().st_size
+            if total_bytes > MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("Skill folder exceeds the 100 MB limit")
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def preview_import(
     source: Path,
     staging_parent: Path,
@@ -99,10 +141,13 @@ def preview_import(
     warnings: list[str] = []
     try:
         if source.is_dir():
+            _validate_source_tree(source)
             skill_root = staging / "package"
             shutil.copytree(source, skill_root)
             package = parse_skill_dir(skill_root)
         elif source.suffix.lower() == ".md":
+            if source.stat().st_size > MAX_SKILL_MD_BYTES:
+                raise ValueError("Skill Markdown file exceeds the 2 MB limit")
             text = source.read_text(encoding="utf-8")
             try:
                 package = parse_skill_text(text, staging)
@@ -141,21 +186,22 @@ def preview_import(
 def install_preview(preview: SkillImportPreview, skills_root: Path, *, overwrite: bool = False) -> Path:
     skills_root.mkdir(parents=True, exist_ok=True)
     destination = skills_root / preview.package.name
-    if destination.exists() and not overwrite:
+    destination_exists = destination.exists() or destination.is_symlink()
+    if destination_exists and not overwrite:
         raise FileExistsError(f"Skill already installed: {preview.package.name}")
-    if destination.exists():
+    if destination_exists:
         backup = skills_root / f".backup-{preview.package.name}"
-        if backup.exists():
-            shutil.rmtree(backup)
+        if backup.exists() or backup.is_symlink():
+            _remove_path(backup)
         destination.replace(backup)
         try:
             shutil.copytree(preview.package.root, destination)
         except Exception:
-            if destination.exists():
-                shutil.rmtree(destination)
+            if destination.exists() or destination.is_symlink():
+                _remove_path(destination)
             backup.replace(destination)
             raise
-        shutil.rmtree(backup)
+        _remove_path(backup)
     else:
         shutil.copytree(preview.package.root, destination)
     parse_skill_dir(destination)

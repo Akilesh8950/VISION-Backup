@@ -31,10 +31,25 @@ class EndpointSelection:
 
 
 class EndpointResolver:
-    def __init__(self, config: AppConfig, remote_api_key: str = ""):
+    def __init__(
+        self,
+        config: AppConfig,
+        remote_api_key: str = "",
+        *,
+        remote_api_key_provider: Callable[[], str] | None = None,
+    ):
         self.config = config
         self.remote_api_key = remote_api_key
+        self.remote_api_key_provider = remote_api_key_provider
         self.local_failures = 0
+
+    def _current_remote_api_key(self) -> str:
+        if self.remote_api_key_provider is not None:
+            try:
+                return str(self.remote_api_key_provider() or "")
+            except Exception:
+                return ""
+        return self.remote_api_key
 
     def local_endpoint(self, model: str = "") -> Endpoint:
         return Endpoint("local", self.config.local_base_url, model or self.config.local_model_override)
@@ -46,19 +61,26 @@ class EndpointResolver:
             "cloud",
             self.config.remote_base_url.strip().rstrip("/"),
             model or self.config.remote_model_override,
-            self.remote_api_key,
+            self._current_remote_api_key(),
         )
+
+    @staticmethod
+    async def _healthy(health_check: HealthCheck, endpoint: Endpoint) -> bool:
+        try:
+            return bool(await health_check(endpoint))
+        except Exception:
+            return False
 
     async def select(self, health_check: HealthCheck) -> EndpointSelection:
         mode = EndpointMode(self.config.endpoint_mode)
         if mode == EndpointMode.CLOUD:
             cloud = self.cloud_endpoint()
-            if cloud and await health_check(cloud):
+            if cloud and await self._healthy(health_check, cloud):
                 return EndpointSelection(cloud, self.local_failures)
             return EndpointSelection(None, self.local_failures, error="Remote endpoint is unavailable or not configured")
 
         local = self.local_endpoint()
-        if await health_check(local):
+        if await self._healthy(health_check, local):
             self.local_failures = 0
             return EndpointSelection(local, 0)
 
@@ -68,7 +90,7 @@ class EndpointResolver:
             mode == EndpointMode.AUTO
             and self.local_failures >= 2
             and cloud
-            and await health_check(cloud)
+            and await self._healthy(health_check, cloud)
         ):
             return EndpointSelection(
                 cloud, self.local_failures, failover_offered=True, failed_over=True

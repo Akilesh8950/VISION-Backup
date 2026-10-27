@@ -1,7 +1,27 @@
+export const demoProjects = [
+  { id: 'demo-project-product', name: 'Product Research' },
+  { id: 'demo-project-release', name: 'Release Planning' },
+]
+
 export const demoConversations = [
-  { id: 'demo-1', title: 'Weather and system check', pinned: true, updated_at: Date.now() / 1000 - 3600 },
-  { id: 'demo-2', title: 'Quarterly values chart', pinned: false, updated_at: Date.now() / 1000 - 90000 },
-  { id: 'demo-3', title: 'Project source review', pinned: false, updated_at: Date.now() / 1000 - 400000 },
+  { id: 'demo-1', title: 'Weather and system check', pinned: true, project_id: 'demo-project-product', updated_at: Date.now() / 1000 - 3600 },
+  { id: 'demo-2', title: 'Quarterly values chart', pinned: false, project_id: 'demo-project-release', updated_at: Date.now() / 1000 - 90000 },
+  { id: 'demo-3', title: 'Project source review', pinned: false, project_id: 'demo-project-product', updated_at: Date.now() / 1000 - 400000 },
+]
+
+export const demoLibrary = [
+  {
+    id: 'demo-library-notes', name: 'Research notes.md', extension: '.md', kind: 'text', mime_type: 'text/markdown',
+    size: 8420, used_in_chats: 2, attachable: true, updated_at: new Date(Date.now() - 86400000).toISOString(), thumbnail: '',
+  },
+  {
+    id: 'demo-library-data', name: 'quarterly-values.csv', extension: '.csv', kind: 'spreadsheet', mime_type: 'text/csv',
+    size: 2910, used_in_chats: 1, attachable: true, updated_at: new Date(Date.now() - 172800000).toISOString(), thumbnail: '',
+  },
+  {
+    id: 'demo-library-brief', name: 'Release brief.pdf', extension: '.pdf', kind: 'document', mime_type: 'application/pdf',
+    size: 184320, used_in_chats: 0, attachable: false, updated_at: new Date(Date.now() - 259200000).toISOString(), thumbnail: '',
+  },
 ]
 
 export const demoMessages = [
@@ -59,11 +79,26 @@ export const demoMessages = [
   },
 ]
 
+export const demoUpdates = {
+  enabled: true,
+  offline: false,
+  channel: 'stable',
+  auto_check: true,
+  last_checked: new Date().toISOString(),
+  launcher_managed: false,
+  channels: {
+    app: { channel: 'app', installed_version: '1.0.0', available_version: '', status: 'up_to_date', status_label: 'Up to date', last_checked: new Date().toISOString(), progress: null, notes: 'VISION 1.0.0 is the current release.', error: '', previous_version: '' },
+    model: { channel: 'model', installed_version: '46956dae5e21', available_version: '', status: 'up_to_date', status_label: 'Up to date', last_checked: new Date().toISOString(), progress: null, notes: '', error: '', previous_version: '' },
+    config: { channel: 'config', installed_version: '1.0.0', available_version: '', status: 'up_to_date', status_label: 'Up to date', last_checked: new Date().toISOString(), progress: null, notes: '', error: '', previous_version: '' },
+  },
+  ui_strings: {},
+  installed_model_sha: '46956dae5e217795a41d7bd40b72962ad7b6fde5',
+  model_updated_at: new Date(Date.now() - 3 * 86400000).toISOString(),
+}
+
 export const demoServer = {
-  state: 'Healthy', running: true, healthy: true, failures: 0,
-  local_base_url: 'http://127.0.0.1:8080/v1', model_exists: true, model_size: 5629108640,
-  expected_model_size: 5629108640, model_path: 'C:\\Users\\You\\AppData\\Local\\VISION\\models\\vision.gguf',
-  binary: 'C:\\Users\\You\\AppData\\Local\\VISION\\bin\\llama-server.exe', build: 11819,
-  build_supported: true, minimum_build: 11815,
-  command: ['llama-server', '-m', 'vision.gguf', '--host', '127.0.0.1', '--port', '8080', '--jinja', '--flash-attn', 'on'],
+  state: 'Healthy', running: true, healthy: true, failures: 0, internet: 'online',
+  model_exists: true, model_size: 5629108640, expected_model_size: 5629108640,
+  model_path: 'vision.gguf', binary: 'llama-server.exe', binary_checked: true,
+  build: 11819, build_supported: true, minimum_build: 11815,
 }

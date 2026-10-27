@@ -63,13 +63,48 @@ class FirstRunWizard(QDialog):
     def _run(self, function, success: str) -> None:
         if self._thread and self._thread.isRunning(): return
         self.progress.show(); self.status.setText("Working…")
-        self._thread = QThread(self); self._worker = FunctionWorker(function); self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(lambda _result: (self.status.setText(success), self._refresh_status(), self.progress.hide()))
-        self._worker.failed.connect(lambda error: (self.status.setText(f"Failed: {error}"), self.progress.hide()))
-        self._worker.finished.connect(self._thread.quit); self._worker.failed.connect(self._thread.quit)
-        self._thread.start()
+        thread = QThread(self); worker = FunctionWorker(function); worker.moveToThread(thread)
+        self._thread, self._worker = thread, worker
+
+        def cleanup() -> None:
+            if self._thread is thread:
+                self._thread = None
+            if self._worker is worker:
+                self._worker = None
+            worker.deleteLater()
+            thread.deleteLater()
+
+        def succeeded(_result) -> None:
+            self.status.setText(success)
+            self._refresh_status()
+            self.progress.hide()
+
+        def failed(error: str) -> None:
+            self.status.setText(f"Failed: {error}")
+            self.progress.hide()
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(succeeded)
+        worker.failed.connect(failed)
+        worker.finished.connect(thread.quit); worker.failed.connect(thread.quit)
+        thread.finished.connect(cleanup)
+        try:
+            thread.start()
+        except Exception as exc:
+            cleanup()
+            self.status.setText(f"Failed: {exc}")
+            self.progress.hide()
 
     def _finish(self) -> None:
+        if self._thread and self._thread.isRunning():
+            self.status.setText("Wait for the current setup task to finish before closing setup.")
+            return
         self.config.gpu_layers = self.gpu.value(); self.config.first_run_completed = True; self.config.save(self.paths)
         self.finished_setup.emit(); self.accept()
+
+    def closeEvent(self, event) -> None:
+        if self._thread and self._thread.isRunning():
+            self.status.setText("Wait for the current setup task to finish before closing setup.")
+            event.ignore()
+            return
+        super().closeEvent(event)

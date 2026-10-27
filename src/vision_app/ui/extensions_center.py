@@ -27,12 +27,18 @@ from PySide6.QtWidgets import (
 
 from ..config import AppConfig
 from ..credentials import CredentialStore
-from ..extensions.connectors import ConnectorConfig, load_connectors, save_connectors
+from ..extensions.connectors import (
+    ConnectorConfig,
+    load_connectors,
+    load_connectors_resilient,
+    save_connectors,
+)
 from ..extensions.mcp_config import (
     McpServerConfig,
     export_mcp_servers,
     import_mcp_servers,
     load_mcp_config,
+    load_mcp_config_resilient,
     save_mcp_config,
 )
 from ..extensions.skill_import import export_skill, import_skill
@@ -63,6 +69,30 @@ class ExtensionsCenterDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject); buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+
+    def _load_mcp_for_edit(self):
+        try:
+            return load_mcp_config(self.paths.mcp_config)
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "MCP configuration needs repair",
+                "This change was not saved because the MCP configuration file is invalid. "
+                "Repair or remove the invalid record first.",
+            )
+            return None
+
+    def _load_connectors_for_edit(self):
+        try:
+            return load_connectors(self.paths.connectors_config)
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "Connector configuration needs repair",
+                "This change was not saved because the connector configuration file is invalid. "
+                "Repair or remove the invalid record first.",
+            )
+            return None
 
     def _builtins_tab(self) -> None:
         widget = QWidget(); layout = QVBoxLayout(widget)
@@ -103,7 +133,7 @@ class ExtensionsCenterDialog(QDialog):
 
     def _selected_skill(self) -> str:
         item = self.skills_list.currentItem()
-        return str(item.data(Qt.ItemDataRole.UserRole)) if item else ""
+        return str(item.data(Qt.ItemDataRole.UserRole) or "") if item else ""
 
     def _show_skill(self) -> None:
         name = self._selected_skill()
@@ -174,7 +204,7 @@ class ExtensionsCenterDialog(QDialog):
 
     def _refresh_mcp(self) -> None:
         if not hasattr(self, "mcp_list"): return
-        data = load_mcp_config(self.paths.mcp_config)
+        data, errors = load_mcp_config_resilient(self.paths.mcp_config)
         enabled = set(self.config.enabled_mcp_servers)
         self.mcp_list.blockSignals(True); self.mcp_list.clear()
         for server in data.servers:
@@ -184,20 +214,41 @@ class ExtensionsCenterDialog(QDialog):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if server.id in enabled and server.enabled else Qt.CheckState.Unchecked)
             self.mcp_list.addItem(item)
+        for key, message in errors.items():
+            item = QListWidgetItem(f"Invalid MCP record ({key}) — {message}")
+            item.setData(Qt.ItemDataRole.UserRole, "")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            self.mcp_list.addItem(item)
         self.mcp_list.blockSignals(False)
+        if hasattr(self, "mcp_status"):
+            self.mcp_status.setText(
+                "Some MCP records are invalid and were skipped. Editing is disabled by safety checks until the file is repaired."
+                if errors else
+                "External tools default to Ask every time. Changed toolsets require re-approval."
+            )
 
     def _selected_mcp(self) -> McpServerConfig | None:
-        item = self.mcp_list.currentItem(); 
+        item = self.mcp_list.currentItem()
         if not item: return None
-        server_id = str(item.data(Qt.ItemDataRole.UserRole))
-        return next((s for s in load_mcp_config(self.paths.mcp_config).servers if s.id == server_id), None)
+        server_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not server_id: return None
+        data, _errors = load_mcp_config_resilient(self.paths.mcp_config)
+        return next((s for s in data.servers if s.id == server_id), None)
 
     def _mcp_enabled_changed(self, item: QListWidgetItem) -> None:
-        server_id = str(item.data(Qt.ItemDataRole.UserRole)); data = load_mcp_config(self.paths.mcp_config)
+        server_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not server_id: return
+        data = self._load_mcp_for_edit()
+        if data is None:
+            self._refresh_mcp(); return
         enabled = item.checkState() == Qt.CheckState.Checked
         for server in data.servers:
             if server.id == server_id: server.enabled = enabled
-        save_mcp_config(self.paths.mcp_config, data)
+        try:
+            save_mcp_config(self.paths.mcp_config, data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not enable MCP server", str(exc))
+            self._refresh_mcp(); return
         values = set(self.config.enabled_mcp_servers); values.add(server_id) if enabled else values.discard(server_id)
         self.config.enabled_mcp_servers = sorted(values); self.config.save(self.paths); self.changed.emit()
 
@@ -210,17 +261,32 @@ class ExtensionsCenterDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel); form.addRow(buttons)
         buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
         if dialog.exec() != QDialog.DialogCode.Accepted or not name.text().strip(): return
+        data = self._load_mcp_for_edit()
+        if data is None: return
         import shlex
-        config = McpServerConfig(id=name.text(), display_name=name.text().strip(), transport=transport.currentText(), command=command.text().strip(), args=shlex.split(args.text()) if args.text().strip() else [], url=url.text().strip())
+        try:
+            config = McpServerConfig(id=name.text(), display_name=name.text().strip(), transport=transport.currentText(), command=command.text().strip(), args=shlex.split(args.text()) if args.text().strip() else [], url=url.text().strip())
+        except Exception as exc:
+            QMessageBox.warning(self, "Invalid MCP server", str(exc)); return
         if token.text():
             key = f"MCP/{config.id}/header/Authorization"; config.header_refs["Authorization"] = key; self.credentials.set(key, token.text() if token.text().startswith("Bearer ") else "Bearer " + token.text())
-        data = load_mcp_config(self.paths.mcp_config); data.servers = [s for s in data.servers if s.id != config.id] + [config]; save_mcp_config(self.paths.mcp_config, data)
+        data.servers = [s for s in data.servers if s.id != config.id] + [config]
+        try:
+            save_mcp_config(self.paths.mcp_config, data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not save MCP server", str(exc)); return
         self._refresh_mcp(); self.changed.emit()
 
     def _remove_mcp(self) -> None:
         server = self._selected_mcp()
         if not server: return
-        data = load_mcp_config(self.paths.mcp_config); data.servers = [s for s in data.servers if s.id != server.id]; save_mcp_config(self.paths.mcp_config, data)
+        data = self._load_mcp_for_edit()
+        if data is None: return
+        data.servers = [s for s in data.servers if s.id != server.id]
+        try:
+            save_mcp_config(self.paths.mcp_config, data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not remove MCP server", str(exc)); return
         self.config.enabled_mcp_servers = [x for x in self.config.enabled_mcp_servers if x != server.id]; self.config.save(self.paths); self._refresh_mcp(); self.changed.emit()
 
     def _test_mcp(self) -> None:
@@ -231,15 +297,25 @@ class ExtensionsCenterDialog(QDialog):
         filename, _ = QFileDialog.getOpenFileName(self, "Import MCP JSON", "", "JSON (*.json)")
         if not filename: return
         try:
-            configs, secrets = import_mcp_servers(json.loads(Path(filename).read_text(encoding="utf-8")))
+            source = Path(filename)
+            if source.stat().st_size > 5 * 1024 * 1024:
+                raise ValueError("MCP import file exceeds 5 MB")
+            configs, secrets = import_mcp_servers(json.loads(source.read_text(encoding="utf-8")))
+            data = load_mcp_config(self.paths.mcp_config)
             for key, value in secrets.items(): self.credentials.set(key, value)
-            data = load_mcp_config(self.paths.mcp_config); ids = {c.id for c in configs}; data.servers = [s for s in data.servers if s.id not in ids] + configs; save_mcp_config(self.paths.mcp_config, data)
+            ids = {c.id for c in configs}; data.servers = [s for s in data.servers if s.id not in ids] + configs; save_mcp_config(self.paths.mcp_config, data)
             self._refresh_mcp(); self.changed.emit(); QMessageBox.information(self, "Imported", f"Imported {len(configs)} server(s), disabled by default.")
         except Exception as exc: QMessageBox.warning(self, "Import failed", str(exc))
 
     def _export_mcp(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(self, "Export MCP JSON", "mcp-servers.json", "JSON (*.json)")
-        if filename: Path(filename).write_text(json.dumps(export_mcp_servers(load_mcp_config(self.paths.mcp_config).servers), indent=2), encoding="utf-8")
+        if not filename: return
+        data = self._load_mcp_for_edit()
+        if data is None: return
+        try:
+            Path(filename).write_text(json.dumps(export_mcp_servers(data.servers), indent=2), encoding="utf-8")
+        except Exception as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
 
     def _connectors_tab(self) -> None:
         widget = QWidget(); layout = QVBoxLayout(widget)
@@ -254,25 +330,40 @@ class ExtensionsCenterDialog(QDialog):
 
     def _refresh_connectors(self) -> None:
         if not hasattr(self, "connector_list"): return
+        data, errors = load_connectors_resilient(self.paths.connectors_config)
         values = set(self.config.enabled_connectors); self.connector_list.blockSignals(True); self.connector_list.clear()
-        for connector in load_connectors(self.paths.connectors_config).connectors:
+        for connector in data.connectors:
             item = QListWidgetItem(f"{connector.display_name} — {connector.url} ({connector.auth_type})")
             item.setData(Qt.ItemDataRole.UserRole, connector.id); item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if connector.id in values and connector.enabled else Qt.CheckState.Unchecked); self.connector_list.addItem(item)
+        for key, message in errors.items():
+            item = QListWidgetItem(f"Invalid connector record ({key}) — {message}")
+            item.setData(Qt.ItemDataRole.UserRole, "")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            self.connector_list.addItem(item)
         self.connector_list.blockSignals(False)
 
     def _selected_connector(self) -> ConnectorConfig | None:
         item = self.connector_list.currentItem()
         if not item: return None
-        connector_id = str(item.data(Qt.ItemDataRole.UserRole))
-        return next((c for c in load_connectors(self.paths.connectors_config).connectors if c.id == connector_id), None)
+        connector_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not connector_id: return None
+        data, _errors = load_connectors_resilient(self.paths.connectors_config)
+        return next((c for c in data.connectors if c.id == connector_id), None)
 
     def _connector_enabled_changed(self, item: QListWidgetItem) -> None:
-        connector_id = str(item.data(Qt.ItemDataRole.UserRole)); enabled = item.checkState() == Qt.CheckState.Checked
-        data = load_connectors(self.paths.connectors_config)
+        connector_id = str(item.data(Qt.ItemDataRole.UserRole) or ""); enabled = item.checkState() == Qt.CheckState.Checked
+        if not connector_id: return
+        data = self._load_connectors_for_edit()
+        if data is None:
+            self._refresh_connectors(); return
         for connector in data.connectors:
             if connector.id == connector_id: connector.enabled = enabled
-        save_connectors(self.paths.connectors_config, data)
+        try:
+            save_connectors(self.paths.connectors_config, data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not enable connector", str(exc))
+            self._refresh_connectors(); return
         values = set(self.config.enabled_connectors); values.add(connector_id) if enabled else values.discard(connector_id)
         self.config.enabled_connectors = sorted(values); self.config.save(self.paths); self.changed.emit()
 
@@ -283,19 +374,38 @@ class ExtensionsCenterDialog(QDialog):
         form.addRow("Display name", name); form.addRow("Remote MCP URL", url); form.addRow("Auth", auth); form.addRow("Token/API key", token)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel); form.addRow(buttons); buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject)
         if dialog.exec() != QDialog.DialogCode.Accepted or not name.text().strip() or not url.text().strip(): return
-        connector = ConnectorConfig(id=name.text(), display_name=name.text().strip(), transport="streamable_http", url=url.text().strip(), auth_type=auth.currentText())
-        if token.text():
+        data = self._load_connectors_for_edit()
+        if data is None: return
+        try:
+            connector = ConnectorConfig(id=name.text(), display_name=name.text().strip(), transport="streamable_http", url=url.text().strip(), auth_type=auth.currentText())
+        except Exception as exc:
+            QMessageBox.warning(self, "Invalid connector", str(exc)); return
+        if token.text() and connector.auth_type != "none":
             key = f"CONNECTOR/{connector.id}/token"
             header = "Authorization" if connector.auth_type == "bearer" else "X-API-Key"
             connector.header_refs[header] = key; self.credentials.set(key, "Bearer " + token.text() if header == "Authorization" and not token.text().startswith("Bearer ") else token.text())
-        data = load_connectors(self.paths.connectors_config); data.connectors = [c for c in data.connectors if c.id != connector.id] + [connector]; save_connectors(self.paths.connectors_config, data)
+        data.connectors = [c for c in data.connectors if c.id != connector.id] + [connector]
+        try:
+            save_connectors(self.paths.connectors_config, data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not save connector", str(exc)); return
         self._refresh_connectors(); self.changed.emit()
 
     def _remove_connector(self) -> None:
         connector = self._selected_connector()
         if not connector: return
-        for key in set(connector.header_refs.values()) | set(connector.env_refs.values()): self.credentials.delete(key)
-        data = load_connectors(self.paths.connectors_config); data.connectors = [c for c in data.connectors if c.id != connector.id]; save_connectors(self.paths.connectors_config, data)
+        data = self._load_connectors_for_edit()
+        if data is None: return
+        data.connectors = [c for c in data.connectors if c.id != connector.id]
+        try:
+            save_connectors(self.paths.connectors_config, data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not remove connector", str(exc)); return
+        # Remove secrets only after the record removal is durable; deleting
+        # them first could strand a still-saved connector without its key.
+        for key in set(connector.header_refs.values()) | set(connector.env_refs.values()):
+            try: self.credentials.delete(key)
+            except Exception: pass
         self.config.enabled_connectors = [x for x in self.config.enabled_connectors if x != connector.id]; self.config.save(self.paths); self._refresh_connectors(); self.changed.emit()
 
     def _test_connector(self) -> None:

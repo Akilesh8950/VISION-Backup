@@ -1,6 +1,6 @@
 {
   "name": "vision-frontend",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "VISION premium React interface for pywebview/WebView2",
@@ -15,7 +15,7 @@
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^5.4.19"
+    "@vitejs/plugin-react": "^6.1.2",
+    "vite": "^8.3.5"
   }
 }

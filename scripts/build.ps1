@@ -16,7 +16,7 @@ if (-not $SkipInstall) {
 
 if ($BuildFrontend) {
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        throw "-BuildFrontend requires Node/npm. Install Node 20+ or omit the switch to package the committed app\web build."
+        throw "-BuildFrontend requires Node/npm. Install Node 20.19+ (or 22.12+) or omit the switch to package the committed app\web build."
     }
     Push-Location (Join-Path $Root "app\frontend")
     try {
@@ -57,11 +57,19 @@ $BuildInfo = Join-Path $Root "src\vision_app\_build_info.py"
 "BUILD_COMMIT = `"$Commit`"" | Set-Content -Encoding UTF8 $BuildInfo
 
 try {
+    # PyInstaller stores application modules as compiled bytecode in its
+    # archive rather than copying the Python source tree. Optimization level
+    # 1 also removes assert statements; windowed tracebacks are disabled so a
+    # fatal release error does not display local source paths to end users.
+    # This is practical obscurity, not copy protection: local bytecode and
+    # bundled web assets can still be inspected by a determined user.
     & $Python -m PyInstaller `
         --noconfirm `
         --clean `
         --onedir `
         --windowed `
+        --optimize 1 `
+        --disable-windowed-traceback `
         --name VISION `
         --distpath dist `
         --workpath build\pyinstaller `
@@ -83,6 +91,13 @@ $DistDir = Join-Path $Root "dist\VISION"
 $Exe = Join-Path $DistDir "VISION.exe"
 if (-not (Test-Path $Exe)) { throw "Expected executable was not produced: $Exe" }
 
+# Update Gate 3 reads this file from update ZIPs before extracting them.
+$VersionJsonPath = Join-Path $DistDir "version.json"
+$VersionMatch = Select-String -Path (Join-Path $Root "src\vision_app\__init__.py") -Pattern '__version__\s*=\s*"([^"]+)"'
+if (-not $VersionMatch) { throw "Could not read __version__ for version.json" }
+$AppBuildVersion = $VersionMatch.Matches[0].Groups[1].Value
+[ordered]@{ version = $AppBuildVersion; channel = "stable"; platform = "windows-x64" } | ConvertTo-Json | Set-Content $VersionJsonPath -Encoding UTF8
+
 $WebIndexCandidates = @(
     (Join-Path $DistDir "_internal\app\web\index.html"),
     (Join-Path $DistDir "app\web\index.html")
@@ -101,6 +116,20 @@ foreach ($assetRef in $AssetRefs) {
 foreach ($extra in @("screenshots.html", "licenses\react.txt", "licenses\chartjs.txt")) {
     if (-not (Test-Path (Join-Path $BundledWebDir $extra))) {
         throw "Bundled React frontend is missing expected file: $extra"
+    }
+}
+
+# The release contains the minified production web bundle only: no source
+# maps, JSX/TypeScript sources, or a copied application source tree.
+$LeakedWebFiles = @(Get-ChildItem -LiteralPath $BundledWebDir -Recurse -File | Where-Object {
+    $_.Extension -in @(".map", ".jsx", ".tsx", ".ts") -or $_.Name -eq "package.json"
+})
+if ($LeakedWebFiles.Count -gt 0) {
+    throw "Bundled web output contains development/source files: $($LeakedWebFiles.FullName -join ', ')"
+}
+foreach ($leakedPath in @((Join-Path $DistDir "src"), (Join-Path $DistDir "run_vision.py"), (Join-Path $DistDir "_internal\src"))) {
+    if (Test-Path -LiteralPath $leakedPath) {
+        throw "Packaged app contains an unexpected source-tree path: $leakedPath"
     }
 }
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { memo, useMemo, useState } from 'react'
 import { Icon } from './icons.jsx'
 
 function renderInline(text, keyPrefix, handlers) {
@@ -37,7 +37,7 @@ function Inline({ text, id, handlers }) {
   return <>{renderInline(text, id, handlers)}</>
 }
 
-export function CodeBlock({ language = 'code', code = '', onCopy }) {
+function CodeBlockView({ language = 'code', code = '', onCopy }) {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     await onCopy?.(code)
@@ -56,6 +56,8 @@ export function CodeBlock({ language = 'code', code = '', onCopy }) {
     </div>
   )
 }
+
+export const CodeBlock = memo(CodeBlockView)
 
 function TextBlocks({ text, id, handlers }) {
   const lines = String(text || '').split(/\r?\n/)
@@ -126,8 +128,8 @@ function TextBlocks({ text, id, handlers }) {
   return blocks
 }
 
-export function Markdown({ text = '', onCopy, onSource, onOpenUrl }) {
-  const handlers = { onCopy, onSource, onOpenUrl }
+function MarkdownView({ text = '', onCopy, onSource, onOpenUrl }) {
+  const handlers = useMemo(() => ({ onCopy, onSource, onOpenUrl }), [onCopy, onSource, onOpenUrl])
   const source = String(text || '')
   const out = []
   const fence = /```([^\n`]*)\n?([\s\S]*?)```/g
@@ -148,6 +150,8 @@ export function Markdown({ text = '', onCopy, onSource, onOpenUrl }) {
   }
   return <div className="markdown">{out.length ? out : <p />}</div>
 }
+
+export const Markdown = memo(MarkdownView)
 
 export function extractThink(text) {
   let content = String(text || '')
