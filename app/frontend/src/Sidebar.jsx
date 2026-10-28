@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Icon, LogoMark } from './icons.jsx'
 
 const ROW_HEIGHTS = {
@@ -48,12 +48,42 @@ function projectLabel(project) {
   return String(project?.name || project?.title || project?.id || 'Project')
 }
 
+const ChatMenuItem = memo(function ChatMenuItem({
+  icon,
+  label,
+  hint = '',
+  trailing = null,
+  danger = false,
+  selected = false,
+  disabled = false,
+  onClick,
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={`chat-menu-item${danger ? ' danger' : ''}${selected ? ' selected' : ''}`}
+      aria-current={selected ? 'true' : undefined}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span className="chat-menu-item-icon"><Icon name={icon} size={15} /></span>
+      <span className="chat-menu-item-copy">
+        <span className="chat-menu-item-label">{label}</span>
+        {hint ? <span className="chat-menu-item-hint">{hint}</span> : null}
+      </span>
+      {trailing ? <span className="chat-menu-item-trailing">{trailing}</span> : null}
+    </button>
+  )
+})
+
 const ChatRow = memo(function ChatRow({
   row,
   active,
   projectName,
   showProject,
   editing,
+  menuOpen,
   draft,
   onSelect,
   onStartEdit,
@@ -64,7 +94,10 @@ const ChatRow = memo(function ChatRow({
 }) {
   const title = row.title || 'New chat'
   return (
-    <div className={`chat-item ${active ? 'active' : ''}`}>
+    <div
+      className={`chat-item ${active ? 'active' : ''}${menuOpen ? ' menu-open' : ''}`}
+      onContextMenu={(event) => { if (!editing) onOpenMenu(event, row) }}
+    >
       {editing ? (
         <input
           className="chat-title-input"
@@ -83,9 +116,16 @@ const ChatRow = memo(function ChatRow({
         <button
           type="button"
           className="chat-main"
-          title={`${title} — double-click to rename`}
+          title={`${title} — double-click or press F2 to rename`}
+          aria-current={active ? 'page' : undefined}
           onClick={() => onSelect(row.id)}
           onDoubleClick={(event) => { event.preventDefault(); onStartEdit(row) }}
+          onKeyDown={(event) => {
+            if (event.key === 'F2') {
+              event.preventDefault()
+              onStartEdit(row)
+            }
+          }}
         >
           <Icon name={row.pinned ? 'pin' : 'message'} size={15} />
           <span className="chat-title">{title}</span>
@@ -96,10 +136,11 @@ const ChatRow = memo(function ChatRow({
       {!editing ? (
         <button
           type="button"
-          className="icon-btn small chat-menu-button"
+          className={`icon-btn small chat-menu-button${menuOpen ? ' open' : ''}`}
           title={`More actions for ${title}`}
           aria-label={`More actions for ${title}`}
           aria-haspopup="menu"
+          aria-expanded={Boolean(menuOpen)}
           onClick={(event) => onOpenMenu(event, row)}
         >
           <Icon name="dots" size={16} />
@@ -129,6 +170,7 @@ export const Sidebar = memo(function Sidebar({
   onRenameConversation,
   onTogglePinned,
   onAssignProject,
+  onExportConversation,
   onDeleteConversation,
   onOpenLibrary,
   onOpenServer,
@@ -138,6 +180,8 @@ export const Sidebar = memo(function Sidebar({
 }) {
   const viewportRef = useRef(null)
   const searchRef = useRef(null)
+  const menuRef = useRef(null)
+  const menuAnchorRef = useRef(null)
   const scrollFrameRef = useRef(0)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(420)
@@ -306,13 +350,36 @@ export const Sidebar = memo(function Sidebar({
     const onPointerDown = (event) => {
       if (!event.target.closest('.chat-menu') && !event.target.closest('.chat-menu-button')) setMenu(null)
     }
-    const onKeyDown = (event) => { if (event.key === 'Escape') setMenu(null) }
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setMenu(null)
+        window.setTimeout(() => menuAnchorRef.current?.focus?.(), 0)
+      }
+    }
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
     return () => {
       document.removeEventListener('pointerdown', onPointerDown)
       document.removeEventListener('keydown', onKeyDown)
     }
+  }, [menu])
+
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) return
+    const { offsetWidth: width, offsetHeight: height } = menuRef.current
+    const x = Math.max(8, Math.min(menu.x, window.innerWidth - width - 8))
+    const y = Math.max(8, Math.min(menu.y, window.innerHeight - height - 8))
+    if (Math.abs(x - menu.x) > 0.5 || Math.abs(y - menu.y) > 0.5) {
+      setMenu((current) => (current ? { ...current, x, y } : current))
+    }
+  }, [menu, projects.length])
+
+  useEffect(() => {
+    if (!menu) return
+    const frame = window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector('button[role="menuitem"]:not(:disabled)')?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
   }, [menu])
 
   const handleScroll = useCallback((event) => {
@@ -347,14 +414,46 @@ export const Sidebar = memo(function Sidebar({
   const openMenu = useCallback((event, row) => {
     event.preventDefault()
     event.stopPropagation()
-    const rect = event.currentTarget.getBoundingClientRect()
-    const width = 238
-    const estimatedHeight = 330
+    const target = event.currentTarget
+    const anchorButton = target?.classList?.contains('chat-menu-button')
+      ? target
+      : target?.querySelector?.('.chat-menu-button')
+    if (event.type === 'click' && menu && String(menu.row.id) === String(row.id)) {
+      setMenu(null)
+      return
+    }
+    menuAnchorRef.current = anchorButton || null
+    const rect = target.getBoundingClientRect()
+    const width = 288
+    const estimatedHeight = Math.min(560, 452 + projects.length * 41)
+    const pointerMenu = event.type === 'contextmenu'
+    const preferredX = pointerMenu ? event.clientX : rect.right - width
+    const preferredY = pointerMenu ? event.clientY + 6 : rect.bottom + 6
     setMenu({
       row,
-      x: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
-      y: Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - estimatedHeight - 8)),
+      x: Math.max(8, Math.min(preferredX, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(preferredY, window.innerHeight - estimatedHeight - 8)),
     })
+  }, [menu, projects.length])
+
+  const handleMenuKeyDown = useCallback((event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setMenu(null)
+      window.setTimeout(() => menuAnchorRef.current?.focus?.(), 0)
+      return
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const items = Array.from(menuRef.current?.querySelectorAll('button[role="menuitem"]:not(:disabled)') || [])
+    if (!items.length) return
+    event.preventDefault()
+    const activeIndex = items.indexOf(document.activeElement)
+    let nextIndex = activeIndex
+    if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = items.length - 1
+    else if (event.key === 'ArrowDown') nextIndex = activeIndex < 0 ? 0 : (activeIndex + 1) % items.length
+    else nextIndex = activeIndex < 0 ? items.length - 1 : (activeIndex - 1 + items.length) % items.length
+    items[nextIndex]?.focus()
   }, [])
 
   const renderRow = (virtualRow) => {
@@ -443,6 +542,7 @@ export const Sidebar = memo(function Sidebar({
         projectName={projectLabel(projectById.get(String(row.project_id || '')))}
         showProject={Boolean(row.project_id && virtualRow.section !== 'project')}
         editing={String(editingId) === String(row.id)}
+        menuOpen={Boolean(menu?.row && String(menu.row.id) === String(row.id))}
         draft={editingDraft}
         onSelect={onSelectConversation}
         onStartEdit={startEdit}
@@ -457,6 +557,14 @@ export const Sidebar = memo(function Sidebar({
   const menuRow = menu?.row
     ? conversations.find((row) => String(row.id) === String(menu.row.id)) || menu.row
     : null
+  const menuProject = menuRow?.project_id ? projectById.get(String(menuRow.project_id)) : null
+  const menuIsCurrent = Boolean(menuRow && String(menuRow.id) === String(currentId))
+  const menuMeta = menuRow ? [
+    `Updated ${formatDate(menuRow.updated_at || menuRow.created_at)}`,
+    menuProject ? projectLabel(menuProject) : 'No project',
+    menuRow.pinned ? 'Pinned' : '',
+    menuIsCurrent ? 'Currently open' : '',
+  ].filter(Boolean).join(' · ') : ''
   const visibleRows = rows.slice(visibleRange.start, visibleRange.end)
 
   return (
@@ -560,49 +668,90 @@ export const Sidebar = memo(function Sidebar({
       </div>
 
       {menuRow ? (
-        <div className="chat-menu" role="menu" style={{ left: menu.x, top: menu.y }} aria-label={`Actions for ${menuRow.title || 'New chat'}`}>
-          <div className="chat-menu-title" title={menuRow.title || 'New chat'}>{menuRow.title || 'New chat'}</div>
-          <button type="button" role="menuitem" onClick={() => startEdit(menuRow)}>
-            <Icon name="pencil" size={14} /><span>Rename</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
+        <div
+          ref={menuRef}
+          className="chat-menu"
+          role="menu"
+          style={{ left: menu.x, top: menu.y }}
+          aria-label={`Actions for ${menuRow.title || 'New chat'}`}
+          onKeyDown={handleMenuKeyDown}
+        >
+          <header className="chat-menu-header">
+            <span className="chat-menu-header-icon"><Icon name={menuRow.pinned ? 'pin' : 'message'} size={16} /></span>
+            <span className="chat-menu-header-copy">
+              <span className="chat-menu-title" title={menuRow.title || 'New chat'}>{menuRow.title || 'New chat'}</span>
+              <span className="chat-menu-meta">{menuMeta}</span>
+            </span>
+            {menuIsCurrent ? <span className="chat-menu-current">Open</span> : null}
+          </header>
+
+          <div className="chat-menu-label">Chat actions</div>
+          <ChatMenuItem
+            icon="message"
+            label={menuIsCurrent ? 'Current chat' : 'Open chat'}
+            hint={menuIsCurrent ? 'This conversation is already open' : 'Switch to this conversation'}
+            trailing={menuIsCurrent ? <Icon name="check" size={14} /> : <Icon name="chevR" size={13} />}
+            disabled={menuIsCurrent}
+            onClick={() => { setMenu(null); onSelectConversation?.(menuRow.id) }}
+          />
+          <ChatMenuItem
+            icon="pencil"
+            label="Rename chat"
+            hint="Edit the chat title"
+            trailing={<kbd>F2</kbd>}
+            onClick={() => startEdit(menuRow)}
+          />
+          <ChatMenuItem
+            icon="pin"
+            label={menuRow.pinned ? 'Unpin chat' : 'Pin chat'}
+            hint={menuRow.pinned ? 'Remove from the Pinned section' : 'Keep this chat at the top'}
+            trailing={menuRow.pinned ? <Icon name="check" size={14} /> : null}
             onClick={() => { setMenu(null); onTogglePinned?.(menuRow) }}
-          >
-            <Icon name="pin" size={14} /><span>{menuRow.pinned ? 'Unpin chat' : 'Pin chat'}</span>
-          </button>
+          />
+          <ChatMenuItem
+            icon="download"
+            label="Export as Markdown"
+            hint="Save a copy of this conversation"
+            disabled={!onExportConversation}
+            onClick={() => { setMenu(null); onExportConversation?.(menuRow) }}
+          />
+
+          <div className="chat-menu-separator" />
           <div className="chat-menu-label">Move to project</div>
           <div className="chat-menu-projects">
-            <button
-              type="button"
-              role="menuitem"
+            <ChatMenuItem
+              icon="message"
+              label="No project"
+              hint="Keep in History only"
+              selected={!menuRow.project_id}
+              trailing={!menuRow.project_id ? <Icon name="check" size={14} /> : null}
               onClick={() => { setMenu(null); onAssignProject?.(menuRow, '') }}
-            >
-              <Icon name={!menuRow.project_id ? 'check' : 'message'} size={14} /><span>No project</span>
-            </button>
-            {projects.map((project) => (
-              <button
-                key={project.id}
-                type="button"
-                role="menuitem"
-                onClick={() => { setMenu(null); onAssignProject?.(menuRow, String(project.id)) }}
-              >
-                <Icon name={String(menuRow.project_id || '') === String(project.id) ? 'check' : 'folder'} size={14} />
-                <span>{projectLabel(project)}</span>
-              </button>
-            ))}
+            />
+            {projects.map((project) => {
+              const selected = String(menuRow.project_id || '') === String(project.id)
+              return (
+                <ChatMenuItem
+                  key={project.id}
+                  icon="folder"
+                  label={projectLabel(project)}
+                  hint={selected ? 'Current project' : 'Organize under this project'}
+                  selected={selected}
+                  trailing={selected ? <Icon name="check" size={14} /> : null}
+                  onClick={() => { setMenu(null); onAssignProject?.(menuRow, String(project.id)) }}
+                />
+              )
+            })}
           </div>
+
           <div className="chat-menu-separator" />
-          <button
-            type="button"
-            role="menuitem"
-            className="danger"
+          <div className="chat-menu-label danger-label">Danger zone</div>
+          <ChatMenuItem
+            icon="trash"
+            label={menuRow.pinned ? 'Unpin and delete chat' : 'Delete chat'}
+            hint={menuRow.pinned ? 'Extra confirmation protects pinned chats' : 'Confirmation is required'}
+            danger
             onClick={() => { setMenu(null); onDeleteConversation?.(menuRow) }}
-          >
-            <Icon name="trash" size={14} /><span>{menuRow.pinned ? 'Unpin & delete…' : 'Delete…'}</span>
-          </button>
-          {menuRow.pinned ? <p className="chat-menu-note">Pinned chats require an extra confirmation before deletion.</p> : null}
+          />
         </div>
       ) : null}
     </aside>

@@ -131,6 +131,54 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                 )
                 return result.get("result", {}).get("value")
 
+            # Desktop shell contract: Settings sections live in a right-hand
+            # rail, and the rich History action menu stays inside the window.
+            evaluate("document.querySelector('.settings-footer-btn')?.click()")
+            deadline = time.time() + 20
+            settings_rail_ok = False
+            while time.time() < deadline:
+                state = evaluate(
+                    "(() => { const nav = document.querySelector('.settings-nav');"
+                    " const content = document.querySelector('.settings-content');"
+                    " if (!nav || !content) return ''; const n = nav.getBoundingClientRect();"
+                    " const c = content.getBoundingClientRect();"
+                    " return JSON.stringify({navLeft:n.left, contentRight:c.right}) })()"
+                )
+                if state:
+                    parsed = json.loads(state)
+                    assert parsed["navLeft"] >= parsed["contentRight"] - 1, parsed
+                    settings_rail_ok = True
+                    break
+                time.sleep(0.4)
+            assert settings_rail_ok, "Settings right-hand section rail not reachable"
+
+            evaluate("document.querySelector('.sheet-head .icon-btn')?.click()")
+            time.sleep(0.4)
+            evaluate(
+                "(() => { const buttons = [...document.querySelectorAll('.chat-menu-button')];"
+                " const target = buttons.find((b) => !b.closest('.chat-item')?.classList.contains('active')) || buttons[0];"
+                " target?.click() })()"
+            )
+            deadline = time.time() + 20
+            chat_menu_ok = False
+            while time.time() < deadline:
+                state = evaluate(
+                    "(() => { const menu = document.querySelector('.chat-menu'); if (!menu) return '';"
+                    " const r = menu.getBoundingClientRect();"
+                    " return JSON.stringify({left:r.left, top:r.top, right:r.right, bottom:r.bottom,"
+                    " width:innerWidth, height:innerHeight, text:menu.innerText}) })()"
+                )
+                if state:
+                    parsed = json.loads(state)
+                    assert "Export as Markdown" in parsed["text"], parsed
+                    assert parsed["left"] >= 0 and parsed["top"] >= 0, parsed
+                    assert parsed["right"] <= parsed["width"] + 1, parsed
+                    assert parsed["bottom"] <= parsed["height"] + 1, parsed
+                    chat_menu_ok = True
+                    break
+                time.sleep(0.4)
+            assert chat_menu_ok, "professional chat-history menu not reachable"
+
             # Responsive contract: at the smallest supported window width
             # there is no sideways overflow (the title bar used to force
             # ~541px), the sidebar becomes the JS-driven icon rail, and
@@ -165,7 +213,7 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                 voice_ok = bool(
                     evaluate(
                         "(() => { const tab = [...document.querySelectorAll('.settings-tab')]"
-                        ".find((b) => b.textContent.trim() === 'Voice'); if (tab) tab.click();"
+                        ".find((b) => b.textContent.trim().startsWith('Voice')); if (tab) tab.click();"
                         " return Boolean(document.querySelector('#tts-voice-select')) })()"
                     )
                 )

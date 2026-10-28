@@ -592,12 +592,20 @@ def test_frontend_simple_settings_sidebar_and_release_protections_are_present():
     vite = (ROOT / "app/frontend/vite.config.js").read_text(encoding="utf-8")
     build = (ROOT / "scripts/build.ps1").read_text(encoding="utf-8")
 
-    settings_nav = (
-        "[['general', 'spark', 'General'], ['voice', 'speaker', 'Voice'], ['model', 'server', 'Model'], "
-        "['tools', 'puzzle', 'Tools'], ['library', 'library', 'Library'], "
-        "['privacy', 'shield', 'Privacy'], ['updates', 'download', 'Updates'], ['about', 'info', 'About']]"
-    )
-    assert settings_nav in app
+    for settings_entry in (
+        "['general', 'spark', 'General', 'Appearance & startup']",
+        "['voice', 'speaker', 'Voice', 'Read aloud & Live']",
+        "['model', 'server', 'Model', 'Local & backup AI']",
+        "['tools', 'puzzle', 'Tools', 'Skills & connections']",
+        "['library', 'library', 'Library', 'Files & checkpoints']",
+        "['privacy', 'shield', 'Privacy', 'Data & feedback']",
+        "['updates', 'download', 'Updates', 'App, model & config']",
+        "['about', 'info', 'About', 'Version & credits']",
+    ):
+        assert settings_entry in app
+    assert "<span>Sections</span>" in app and "settings-tab-copy" in app
+    assert "grid-template-columns: minmax(0, 1fr) 232px" in styles
+    assert ".settings-nav { grid-column: 2; grid-row: 1;" in styles
     # Read-aloud voice picker + JS-driven small-window rail (ARCHITECTURE §17).
     assert 'id="tts-voice-select"' in app and "from './voice.js'" in app
     assert "matchMedia('(max-width: 900px)')" in app and "effectiveCollapsed" in app
@@ -614,7 +622,11 @@ def test_frontend_simple_settings_sidebar_and_release_protections_are_present():
     assert "Expand sidebar" in sidebar and "Collapse sidebar" in sidebar
     assert "logo-toggle" in sidebar
     assert "Pinned" in sidebar and "Move to project" in sidebar
-    assert "double-click to rename" in sidebar
+    assert "double-click or press F2 to rename" in sidebar
+    assert "ChatMenuItem" in sidebar and "Chat actions" in sidebar
+    assert "Export as Markdown" in sidebar and "Danger zone" in sidebar
+    assert "onContextMenu" in sidebar and "ArrowDown" in sidebar
+    assert "aria-expanded={Boolean(menuOpen)}" in sidebar
     assert "virtual-spacer" in sidebar and "ROW_HEIGHTS" in sidebar
     assert "lazy(() => import('./LibraryPanel.jsx'))" in app
     assert "lazy(() => import('./widgets.jsx')" in app

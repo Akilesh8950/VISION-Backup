@@ -1205,6 +1205,12 @@ export default function App() {
     }
   }, [callApi, conversations, localConfirm, selectConversation])
 
+  const exportConversationById = useCallback(async (row) => {
+    if (!row?.id) return
+    if (!nativeRef.current) { pushToast('Conversation export runs in the desktop app.', 'error'); return }
+    await callApi('export_conversation', row.id)
+  }, [callApi, pushToast])
+
   const createProject = useCallback(async () => {
     const name = await askPrompt({ title: 'Create project', label: 'Project name', value: '', confirmLabel: 'Create project', rows: 1 })
     const clean = String(name || '').trim()
@@ -1615,6 +1621,7 @@ export default function App() {
           onRenameConversation={renameConversationById}
           onTogglePinned={toggleConversationPinned}
           onAssignProject={assignConversationToProject}
+          onExportConversation={exportConversationById}
           onDeleteConversation={deleteConversationById}
           onOpenLibrary={openLibrary}
           onOpenServer={openServer}
@@ -1728,8 +1735,22 @@ export default function App() {
             <div className="sheet-head"><h2>Settings</h2><button type="button" className="icon-btn" aria-label="Close settings" onClick={() => setOverlay('')}><Icon name="x" size={17} /></button></div>
             <div className="settings-layout">
               <nav className="settings-nav" role="tablist" aria-label="Settings sections">
-                {[['general', 'spark', 'General'], ['voice', 'speaker', 'Voice'], ['model', 'server', 'Model'], ['tools', 'puzzle', 'Tools'], ['library', 'library', 'Library'], ['privacy', 'shield', 'Privacy'], ['updates', 'download', 'Updates'], ['about', 'info', 'About']].map(([id, icon, label]) => (
-                  <button key={id} type="button" role="tab" aria-selected={settingsTab === id} className={`settings-tab ${settingsTab === id ? 'active' : ''}`} aria-current={settingsTab === id ? 'page' : undefined} onClick={() => setSettingsTab(id)}><Icon name={icon} size={16} /><span>{label}</span></button>
+                <div className="settings-nav-heading"><span>Sections</span><small>Choose a category</small></div>
+                {[
+                  ['general', 'spark', 'General', 'Appearance & startup'],
+                  ['voice', 'speaker', 'Voice', 'Read aloud & Live'],
+                  ['model', 'server', 'Model', 'Local & backup AI'],
+                  ['tools', 'puzzle', 'Tools', 'Skills & connections'],
+                  ['library', 'library', 'Library', 'Files & checkpoints'],
+                  ['privacy', 'shield', 'Privacy', 'Data & feedback'],
+                  ['updates', 'download', 'Updates', 'App, model & config'],
+                  ['about', 'info', 'About', 'Version & credits'],
+                ].map(([id, icon, label, hint]) => (
+                  <button key={id} type="button" role="tab" aria-selected={settingsTab === id} className={`settings-tab ${settingsTab === id ? 'active' : ''}`} aria-current={settingsTab === id ? 'page' : undefined} onClick={() => setSettingsTab(id)}>
+                    <Icon name={icon} size={16} />
+                    <span className="settings-tab-copy"><span>{label}</span><small>{hint}</small></span>
+                    <Icon name="chevR" size={13} className="settings-tab-chevron" />
+                  </button>
                 ))}
               </nav>
               <div className="settings-content">
