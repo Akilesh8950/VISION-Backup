@@ -371,8 +371,16 @@ dataset and local rows clear after success. Repeat
 1. Enable Windows reduced-motion/animation-off settings or the browser's
    reduced-motion emulation in debug tooling. Confirm content is readable and
    no essential state depends on animation.
-2. Test 100%, 125% and 150% display scaling; resize from minimum size to full
-   screen. Confirm no clipped composer controls, titlebar buttons or sheets.
+2. Test 100%, 125% and 150% display scaling. On a 1366×768 or similarly small
+   desktop, confirm a fresh launch opens entirely inside the work area rather
+   than at an off-screen fixed 1440×920. Resize continuously from the
+   320×360 minimum through quarter/half snaps, a short wide window, and full
+   screen/maximized. At the minimum, open Settings, Vision Live, Item
+   Library, Sources, and Ctrl+K; confirm no clipped composer controls,
+   titlebar/window buttons, Save footer, or sheet/panel close buttons, and
+   that long content scrolls inside its panel instead of moving the app
+   sideways. Resize the floating Live mini to 240×260 and confirm **Hold to
+   talk** remains reachable.
 3. Navigate with Tab/Shift+Tab only. Confirm focus is always visible and the
    composer, sidebar, tool cards, sheets and confirmation buttons are
    reachable. Esc closes the top sheet/palette/inspector before it stops a

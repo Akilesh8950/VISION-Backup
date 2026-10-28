@@ -433,14 +433,18 @@ groups persist across launches.
 
 ### Window sizes
 
-- Minimum window 520×460; verified comfortable from 400 px previews to
-  large monitors, including short (480 px-high) windows. At ≤900 px the
-  sidebar becomes the icon rail automatically (the user's saved preference
-  returns when the window widens); Settings tabs become a scrollable top
-  bar; at ≤720 px dialogs and side panels go full-width; at ≤540/≤420 px
-  chrome compacts (short title bar, folded status chips) while chat,
-  composer mode toggle, and send remain one tap away. No horizontal
-  scrolling at any size.
+- Minimum native window 320×360. The first launch size is fitted to the
+  primary display instead of always opening at 1440×920, so smaller laptop
+  and scaled Windows desktops do not start with VISION partly off-screen.
+  At ≤900 px the sidebar becomes the icon rail automatically (the user's
+  saved preference returns when the window widens) and Settings tabs become
+  a scrollable top bar. At ≤720 px dialogs and side panels go full-width;
+  at ≤420/≤360 px the rail, title bar, messages, and composer compact or
+  wrap while Attach, Live, Chat/Agent, and Send remain reachable. Short
+  windows use additional 620/460/380 px height modes. Large and ultrawide
+  monitors widen the sidebar and reading column without stretching prose
+  indefinitely. The app shell has no horizontal page scrolling; long
+  transcripts, dialogs, tables, and panels scroll inside their own bounds.
 
 ### Motion
 

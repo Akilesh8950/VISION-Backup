@@ -14,6 +14,7 @@ import time
 import uuid
 import webbrowser
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from enum import Enum
@@ -73,6 +74,9 @@ MAX_ATTACHMENT_BYTES = 256 * 1024
 MAX_ATTACHMENTS = 10
 MAX_ATTACHMENTS_TOTAL_BYTES = 1_000_000
 MAX_EXPORT_BYTES = 20 * 1024 * 1024
+MAIN_WINDOW_MIN_SIZE = (320, 360)
+MAIN_WINDOW_PREFERRED_SIZE = (1440, 920)
+MAIN_WINDOW_FALLBACK_SIZE = (1280, 800)
 LIVE_STATUSES = {
     "idle",
     "listening",
@@ -85,6 +89,63 @@ LIVE_STATUSES = {
     "setup",
 }
 LIVE_MINI_ACTIONS = {"ptt_start", "ptt_stop", "share_frame", "stop", "open_live"}
+
+
+def _main_window_geometry(
+    screens: Iterable[object] | None = None,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return ``(initial_size, minimum_size)`` for the main native window.
+
+    pywebview reports logical display pixels. On smaller laptop and scaled
+    Windows desktops a fixed 1440×920 launch window can start partly
+    off-screen, so use most—but not all—of the primary display while keeping
+    the preferred desktop size on larger monitors. The React shell is
+    usable down to 320×360; on the rare display smaller than that, the
+    native floor is reduced to the display itself instead of forcing an
+    off-screen minimum.
+    """
+
+    screen: object | None = None
+    try:
+        candidates = list(screens) if screens is not None else []
+        # pywebview documents the primary display first. Prefer an explicit
+        # virtual-screen origin when present so a differently ordered
+        # multi-monitor list still sizes the launch window for (0, 0).
+        screen = next(
+            (
+                candidate
+                for candidate in candidates
+                if int(getattr(candidate, "x", 0) or 0) == 0
+                and int(getattr(candidate, "y", 0) or 0) == 0
+            ),
+            candidates[0] if candidates else None,
+        )
+    except Exception:
+        screen = None
+
+    try:
+        screen_width = int(getattr(screen, "width", 0) or 0)
+        screen_height = int(getattr(screen, "height", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        screen_width = 0
+        screen_height = 0
+
+    if screen_width <= 0 or screen_height <= 0:
+        return MAIN_WINDOW_FALLBACK_SIZE, MAIN_WINDOW_MIN_SIZE
+
+    min_width = min(MAIN_WINDOW_MIN_SIZE[0], screen_width)
+    min_height = min(MAIN_WINDOW_MIN_SIZE[1], screen_height)
+    usable_width = max(min_width, screen_width - 32)
+    # Leave room for a Windows taskbar; pywebview's Screen dimensions cover
+    # the whole logical display rather than only the work area.
+    usable_height = max(min_height, screen_height - 48)
+    scaled_width = max(min_width, round(screen_width * 0.94))
+    scaled_height = max(min_height, round(screen_height * 0.92))
+    initial_size = (
+        min(MAIN_WINDOW_PREFERRED_SIZE[0], usable_width, scaled_width),
+        min(MAIN_WINDOW_PREFERRED_SIZE[1], usable_height, scaled_height),
+    )
+    return initial_size, (min_width, min_height)
 
 
 def _payload_dict(value: object) -> dict[str, Any]:
@@ -3468,17 +3529,24 @@ def run_web_app(services: SimpleNamespace | None = None, *, web_dir: str | Path 
     effective_debug = bool(debug and not getattr(sys, "frozen", False))
     storage = services.paths.app_data / "webview"
     storage.mkdir(parents=True, exist_ok=True)
+    try:
+        native_screens = getattr(webview, "screens", [])
+    except Exception:
+        native_screens = []
+    (initial_width, initial_height), native_min_size = _main_window_geometry(
+        native_screens
+    )
     window = webview.create_window(
         PRODUCT_NAME,
         url=str(root / "index.html"),
         js_api=bridge,
-        width=1440,
-        height=920,
-        # The React shell stays fully usable from very small snapped
-        # windows up to large monitors (auto-collapsing rail + compact
-        # breakpoints), so the native floor can be a true small window
-        # instead of the old 980x640. See ARCHITECTURE.md section 17.
-        min_size=(520, 460),
+        width=initial_width,
+        height=initial_height,
+        # The React shell stays usable from a 320×360 snapped/embedded
+        # window up to large and ultrawide monitors. Launch at a size fitted
+        # to the primary display instead of always assuming 1440×920 is
+        # available. See ARCHITECTURE.md section 17.
+        min_size=native_min_size,
         frameless=True,
         easy_drag=False,
         background_color="#0B0D10",

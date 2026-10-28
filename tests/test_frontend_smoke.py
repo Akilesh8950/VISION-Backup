@@ -197,32 +197,60 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                 time.sleep(0.4)
             assert chat_menu_ok, "professional chat-history menu not reachable"
 
-            # Responsive contract: at the smallest supported window width
-            # there is no sideways overflow (the title bar used to force
-            # ~541px), the sidebar becomes the JS-driven icon rail, and
-            # Settings -> Voice with its voice picker is reachable.
-            send(
-                "Emulation.setDeviceMetricsOverride",
-                {"width": 520, "height": 700, "deviceScaleFactor": 1, "mobile": False},
-            )
-            send("Page.navigate", {"url": f"http://127.0.0.1:{port}/index.html?gallery=1"})
-            deadline = time.time() + 30
-            narrow_ok = False
-            while time.time() < deadline:
-                state = evaluate(
-                    "JSON.stringify({ready: (document.body.innerText || '').includes('VISION'),"
-                    " overflow: document.documentElement.scrollWidth > window.innerWidth + 1,"
-                    " sidebar: Math.round(document.querySelector('.sidebar')?.getBoundingClientRect().width || 0)})"
+            # Responsive contract: from the 320x360 native floor through
+            # laptop and ultrawide windows there is no sideways overflow,
+            # the sidebar uses the intended rail/full width, and the
+            # composer + Send stay inside the viewport. This replaces the
+            # old 520px-only check that missed a hidden ~386px floor.
+            responsive_sizes = [
+                (2560, 1080, 300),
+                (1920, 1080, 280),
+                (901, 600, 260),
+                (520, 460, 64),
+                (360, 640, 50),
+                (320, 360, 50),
+            ]
+            for width, height, expected_sidebar in responsive_sizes:
+                send(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False},
                 )
-                if state:
-                    parsed = json.loads(state)
-                    if parsed.get("ready") and parsed.get("sidebar"):
-                        assert parsed["overflow"] is False, f"horizontal overflow at 520px: {parsed}"
-                        assert parsed["sidebar"] <= 72, f"sidebar did not rail at 520px: {parsed}"
-                        narrow_ok = True
-                        break
-                time.sleep(0.4)
-            assert narrow_ok, "app did not settle at 520px wide"
+                send("Page.navigate", {"url": f"http://127.0.0.1:{port}/index.html?gallery=1"})
+                deadline = time.time() + 30
+                size_ok = False
+                while time.time() < deadline:
+                    state = evaluate(
+                        "JSON.stringify((() => {"
+                        " const rect = (s) => { const e = document.querySelector(s); if (!e) return null;"
+                        " const r = e.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom} };"
+                        " return {ready:(document.body.innerText || '').includes('VISION'),"
+                        " overflow:document.documentElement.scrollWidth > window.innerWidth + 1,"
+                        " inner:[innerWidth,innerHeight], app:rect('.app'), sidebar:rect('.sidebar'),"
+                        " main:rect('.main'), composer:rect('.composer'), send:rect('.send-btn')} })())"
+                    )
+                    if state:
+                        parsed = json.loads(state)
+                        if (
+                            parsed.get("ready")
+                            and parsed.get("inner") == [width, height]
+                            and parsed.get("app")
+                            and parsed.get("sidebar")
+                            and parsed.get("main")
+                            and parsed.get("composer")
+                            and parsed.get("send")
+                        ):
+                            assert parsed["overflow"] is False, f"horizontal overflow at {width}x{height}: {parsed}"
+                            assert abs(parsed["app"]["w"] - width) <= 1, parsed
+                            assert abs(parsed["app"]["h"] - height) <= 1, parsed
+                            assert abs(parsed["sidebar"]["w"] - expected_sidebar) <= 1, parsed
+                            for name in ("main", "composer", "send"):
+                                rect = parsed[name]
+                                assert rect["x"] >= -1 and rect["right"] <= width + 1, (name, parsed)
+                            assert parsed["send"]["bottom"] <= height + 1, parsed
+                            size_ok = True
+                            break
+                    time.sleep(0.4)
+                assert size_ok, f"app did not settle at {width}x{height}"
 
             evaluate("document.querySelector('.settings-footer-btn')?.click()")
             deadline = time.time() + 20
@@ -238,7 +266,7 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                 if voice_ok:
                     break
                 time.sleep(0.4)
-            assert voice_ok, "Settings -> Voice picker not reachable at 520px"
+            assert voice_ok, "Settings -> Voice picker not reachable at 320x360"
             assert not exceptions, f"uncaught exceptions: {exceptions}"
         finally:
             ws.close()

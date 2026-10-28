@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from vision_app.app import build_services
 from vision_app.paths import AppPaths
-from vision_app.web_bridge import VisionWebApi, find_web_dir
+from vision_app.web_bridge import VisionWebApi, _main_window_geometry, find_web_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "app" / "web"
@@ -41,6 +42,53 @@ def test_find_web_dir_source_tree_and_explicit(tmp_path):
     explicit.mkdir()
     (explicit / "index.html").write_text("ok", encoding="utf-8")
     assert find_web_dir(explicit) == explicit.resolve()
+
+
+def test_main_window_geometry_fits_primary_display():
+    def screen(width, height):
+        return [SimpleNamespace(width=width, height=height)]
+
+    assert _main_window_geometry() == ((1280, 800), (320, 360))
+    assert _main_window_geometry(screen(1366, 768)) == ((1284, 707), (320, 360))
+    assert _main_window_geometry(screen(1920, 1080)) == ((1440, 920), (320, 360))
+    assert _main_window_geometry(screen(800, 600)) == ((752, 552), (320, 360))
+    assert _main_window_geometry(
+        [
+            SimpleNamespace(x=-1920, y=0, width=1920, height=1080),
+            SimpleNamespace(x=0, y=0, width=1366, height=768),
+        ]
+    ) == ((1284, 707), (320, 360))
+    # A display below the normal floor lowers the native minimum to the
+    # display itself rather than asking Windows for an off-screen window.
+    assert _main_window_geometry(screen(300, 340)) == ((300, 340), (300, 340))
+    assert _main_window_geometry([SimpleNamespace(width="wide", height=900)]) == (
+        (1280, 800),
+        (320, 360),
+    )
+
+
+def test_responsive_shell_contract_covers_tiny_short_and_ultrawide_windows():
+    styles = (FRONTEND_SRC / "styles.css").read_text(encoding="utf-8")
+    bridge_source = (ROOT / "src/vision_app/web_bridge.py").read_text(encoding="utf-8")
+
+    assert "MAIN_WINDOW_MIN_SIZE = (320, 360)" in bridge_source
+    assert "_main_window_geometry" in bridge_source
+    assert 'getattr(webview, "screens", [])' in bridge_source
+    assert "min_size=native_min_size" in bridge_source
+
+    # The old shell had a hidden ~386px content floor. These constraints
+    # are the root-cause fix, not just small-window cosmetics.
+    assert "grid-template-columns: minmax(0, 1fr)" in styles
+    assert ".composer-row { display: flex;" in styles
+    assert ".composer-row .grow { flex: 1 1 0; min-width: 0; }" in styles
+    assert "@media (max-width: 420px)" in styles
+    assert "@media (max-width: 360px)" in styles
+    assert "@media (max-width: 300px)" in styles
+    assert "@media (max-height: 460px)" in styles
+    assert "@media (max-height: 380px)" in styles
+    assert "@media (min-width: 1700px)" in styles
+    assert "@media (min-width: 2300px)" in styles
+    assert ".live-mini-app { height: 100dvh;" in styles
 
 
 def test_bridge_state_settings_and_secret_redaction(tmp_path):

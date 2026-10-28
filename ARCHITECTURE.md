@@ -855,22 +855,40 @@ voices differ per machine, the "soothing voice" is a *policy*, not a file:
 
 ### 17.2 Responsive shell (every window size)
 
-The native window floor dropped from 980×640 to **520×460**
-(`web_bridge.run_web_app`).  The icon rail is switched from React
-(`matchMedia('(max-width: 900px)')` → `effectiveCollapsed = collapsed ||
-narrow`) because `Sidebar.jsx` renders different rows for the rail; the
-earlier CSS-only media query squeezed the full sidebar into 64 px and
-clipped it.  The stored collapse preference is preserved (in a narrow
-window, toggling means "open when widened").  CSS breakpoints adapt layout
-only: ≤1100 padding/type, ≤900 rail + stacked settings nav + single-column
-forms, ≤720 full-bleed sheets/panels, ≤540 compact chrome/type, ≤420
-status pill + model chip fold away, plus `max-height` rules for short
-windows.  Two overflow defects were fixed at the root: the title bar's chat
-title now ellipsizes (`flex` + `min-width: 0`; it previously forced ~541 px
-at any width), and heights use `100dvh`.  Verified with CDP captures at
-1440×900, 1024×700, 800×600, 640×800, 520×700, 400×640 and 1280×480
-(zero horizontal overflow), and locked in by `tests/test_frontend_smoke.py`
-(520 px overflow + rail + Voice-picker reachability assertions).
+The native main-window floor is **320×360** (`web_bridge.run_web_app`).
+Its launch size is fitted to the primary display's logical size from
+pywebview: the preferred 1440×920 is retained on larger monitors, while
+smaller/scaled displays use 94% of the display width and 92% of its height
+inside conservative margins (1280×800 fallback when no display can be read).
+If a display is itself smaller than 320×360, the native minimum is lowered
+to that display instead of requesting an off-screen minimum.
+
+The icon rail is switched from React (`matchMedia('(max-width: 900px)')` →
+`effectiveCollapsed = collapsed || narrow`) because `Sidebar.jsx` renders
+different rows for the rail; the earlier CSS-only media query squeezed the
+full sidebar into 64 px and clipped it.  The stored collapse preference is
+preserved (in a narrow window, toggling means "open when widened").  CSS
+breakpoints adapt layout only: ≥1700/≥2300 wider sidebar and reading column;
+≤1100 padding/type; ≤900 rail + Settings top tabs + single-column forms;
+≤720 full-bleed sheets/panels; ≤540 compact chrome/type and fixed wrapping
+tables; ≤420 a 56 px rail and wrapping composer controls; ≤360 a 50 px rail;
+≤300 a 44 px rail with Send kept on the first composer row; and
+`max-height` 620/460/380 compact modes for short windows.
+
+A later viewport audit found a hidden ~386 px layout floor below the old
+520 px test.  It was fixed at the root with an explicit
+`minmax(0, 1fr)` app column, `min-width: 0`/overflow constraints through
+the shell and transcript, and a shrinkable/wrapping composer row; tables,
+diffs, dialogs, and side panels now wrap or scroll internally instead of
+widening the app.  Verified with Chrome/CDP at 320×340, 320×360, 320×480,
+360×640, 400×700, 520×460, 800×480, 899×600, 901×600, 1024×600, 1366×768,
+1440×900, 1920×1080, 2560×1080, 3840×2160, and 600×1000 with zero document
+horizontal overflow.  Settings, Vision Live, Sources, Item Library, the
+command palette, and the empty-chat hero were also checked at 320×360, and
+the floating Live mini at 240×260.  The selected viewport matrix and
+320×360 Voice-picker reachability are locked in by
+`tests/test_frontend_smoke.py`; display-size calculations are unit-tested in
+`tests/test_web_ui.py`.
 
 ### 17.3 Motion performance
 
