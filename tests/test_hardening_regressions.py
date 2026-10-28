@@ -603,9 +603,11 @@ def test_frontend_simple_settings_sidebar_and_release_protections_are_present():
         "['about', 'info', 'About', 'Version & credits']",
     ):
         assert settings_entry in app
-    assert "<span>Sections</span>" in app and "settings-tab-copy" in app
-    assert "grid-template-columns: 232px minmax(0, 1fr)" in styles
-    assert ".settings-nav { grid-column: 1; grid-row: 1;" in styles
+    assert "SETTINGS_SECTION_GROUPS" in app and "settings-tab-icon" in app
+    assert "settings-nav-group-label" in app and "settings-nav-footer" in app
+    assert "Vision control center" in app and "settings-tab-copy" in app
+    assert "grid-template-columns: 252px minmax(0, 1fr)" in styles
+    assert "grid-column: 1; grid-row: 1 / -1;" in styles
     # Read-aloud voice picker + JS-driven small-window rail (ARCHITECTURE §17).
     assert 'id="tts-voice-select"' in app and "from './voice.js'" in app
     assert "matchMedia('(max-width: 900px)')" in app and "effectiveCollapsed" in app

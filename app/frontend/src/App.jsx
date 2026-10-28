@@ -21,6 +21,24 @@ const PERF_PROFILE_COPY = {
   low_end: 'Runs the model on the CPU only (the graphics slider is ignored) with a smaller context and compressed memory, so it fits PCs like an Intel i3 with 8 GB memory. Answers are slower, but the app stays responsive.',
 }
 
+const SETTINGS_SECTION_GROUPS = [
+  ['Preferences', [
+    ['general', 'spark', 'General', 'Appearance & startup'],
+    ['voice', 'speaker', 'Voice', 'Read aloud & Live'],
+  ]],
+  ['Capabilities', [
+    ['model', 'server', 'Model', 'Local & backup AI'],
+    ['tools', 'puzzle', 'Tools', 'Skills & connections'],
+    ['library', 'library', 'Library', 'Files & checkpoints'],
+  ]],
+  ['Trust & system', [
+    ['privacy', 'shield', 'Privacy', 'Data & feedback'],
+    ['updates', 'download', 'Updates', 'App, model & config'],
+    ['about', 'info', 'About', 'Version & credits'],
+  ]],
+]
+const SETTINGS_SECTIONS = SETTINGS_SECTION_GROUPS.flatMap(([, sections]) => sections)
+
 export function parseArgs(raw) {
   if (raw && typeof raw === 'object') return raw
   if (typeof raw !== 'string' || !raw.trim()) return {}
@@ -1731,29 +1749,79 @@ export default function App() {
 
       {overlay === 'settings' ? (
         <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setOverlay('') }}>
-          <section className="sheet wide" role="dialog" aria-modal="true" aria-label="Settings">
-            <div className="sheet-head"><h2>Settings</h2><button type="button" className="icon-btn" aria-label="Close settings" onClick={() => setOverlay('')}><Icon name="x" size={17} /></button></div>
+          <section className="sheet wide settings-sheet" role="dialog" aria-modal="true" aria-label="Settings">
+            <div className="sheet-head settings-head">
+              <div className="settings-head-copy">
+                <span className="settings-eyebrow">Vision control center</span>
+                <h2>Settings</h2>
+              </div>
+              <span className="settings-current-pill" aria-hidden="true">
+                {SETTINGS_SECTION_GROUPS.find(([, sections]) => sections.some(([id]) => id === settingsTab))?.[0]}
+                <span className="settings-current-separator">/</span>
+                {SETTINGS_SECTIONS.find(([id]) => id === settingsTab)?.[2]}
+              </span>
+              <button type="button" className="icon-btn" aria-label="Close settings" onClick={() => setOverlay('')}><Icon name="x" size={17} /></button>
+            </div>
             <div className="settings-layout">
-              <nav className="settings-nav" role="tablist" aria-label="Settings sections">
-                <div className="settings-nav-heading"><span>Sections</span><small>Choose a category</small></div>
-                {[
-                  ['general', 'spark', 'General', 'Appearance & startup'],
-                  ['voice', 'speaker', 'Voice', 'Read aloud & Live'],
-                  ['model', 'server', 'Model', 'Local & backup AI'],
-                  ['tools', 'puzzle', 'Tools', 'Skills & connections'],
-                  ['library', 'library', 'Library', 'Files & checkpoints'],
-                  ['privacy', 'shield', 'Privacy', 'Data & feedback'],
-                  ['updates', 'download', 'Updates', 'App, model & config'],
-                  ['about', 'info', 'About', 'Version & credits'],
-                ].map(([id, icon, label, hint]) => (
-                  <button key={id} type="button" role="tab" aria-selected={settingsTab === id} className={`settings-tab ${settingsTab === id ? 'active' : ''}`} aria-current={settingsTab === id ? 'page' : undefined} onClick={() => setSettingsTab(id)}>
-                    <Icon name={icon} size={16} />
-                    <span className="settings-tab-copy"><span>{label}</span><small>{hint}</small></span>
-                    <Icon name="chevR" size={13} className="settings-tab-chevron" />
-                  </button>
-                ))}
+              <nav
+                className="settings-nav"
+                role="tablist"
+                aria-label="Settings sections"
+                aria-orientation={effectiveCollapsed ? 'horizontal' : 'vertical'}
+                onKeyDown={(event) => {
+                  if (!['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return
+                  const currentIndex = Math.max(0, SETTINGS_SECTIONS.findIndex(([id]) => id === settingsTab))
+                  let nextIndex = currentIndex
+                  if (event.key === 'Home') nextIndex = 0
+                  else if (event.key === 'End') nextIndex = SETTINGS_SECTIONS.length - 1
+                  else if (event.key === 'ArrowDown' || event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % SETTINGS_SECTIONS.length
+                  else nextIndex = (currentIndex - 1 + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length
+                  const nextId = SETTINGS_SECTIONS[nextIndex][0]
+                  event.preventDefault()
+                  setSettingsTab(nextId)
+                  window.requestAnimationFrame(() => document.getElementById(`settings-tab-${nextId}`)?.focus())
+                }}
+              >
+                <div className="settings-nav-hero">
+                  <LogoMark size={36} />
+                  <div className="settings-nav-hero-copy"><span>VISION</span><small>Desktop app</small></div>
+                  <span className="settings-local-pill"><i aria-hidden="true" />Local</span>
+                </div>
+                <div className="settings-nav-groups">
+                  {SETTINGS_SECTION_GROUPS.map(([groupLabel, sections]) => (
+                    <section className="settings-nav-group" key={groupLabel} aria-label={groupLabel}>
+                      <div className="settings-nav-group-label"><span>{groupLabel}</span><span>{String(sections.length).padStart(2, '0')}</span></div>
+                      {sections.map(([id, icon, label, hint]) => {
+                        const active = settingsTab === id
+                        return (
+                          <button
+                            key={id}
+                            id={`settings-tab-${id}`}
+                            type="button"
+                            role="tab"
+                            tabIndex={active ? 0 : -1}
+                            aria-selected={active}
+                            aria-controls="settings-panel"
+                            aria-current={active ? 'page' : undefined}
+                            className={`settings-tab ${active ? 'active' : ''}`}
+                            title={`${label} — ${hint}`}
+                            onClick={() => setSettingsTab(id)}
+                          >
+                            <span className="settings-tab-icon"><Icon name={icon} size={16} /></span>
+                            <span className="settings-tab-copy"><span>{label}</span><small>{hint}</small></span>
+                            <Icon name="chevR" size={13} className="settings-tab-chevron" />
+                          </button>
+                        )
+                      })}
+                    </section>
+                  ))}
+                </div>
+                <div className="settings-nav-footer">
+                  <span className="settings-nav-footer-icon"><Icon name="shield" size={16} /></span>
+                  <div><strong>Private by design</strong><small>Sensitive details stay tucked away until you open them.</small></div>
+                </div>
               </nav>
-              <div className="settings-content">
+              <div id="settings-panel" className="settings-content" role="tabpanel" aria-labelledby={`settings-tab-${settingsTab}`}>
                 {!form ? <p className="empty-note">Loading settings…</p> : settingsTab === 'general' ? (
                   <><h3>General</h3><p className="section-copy">The everyday options, in one quiet place.</p><div className="simple-stack">
                     <div className="field"><label>Appearance</label><select className="select" value={form.theme} onChange={(e) => { setForm({ ...form, theme: e.target.value }); setTheme(e.target.value) }}><option value="dark">Dark</option><option value="light">Light</option></select></div>

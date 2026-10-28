@@ -152,6 +152,24 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                 time.sleep(0.4)
             assert settings_rail_ok, "Settings left-hand section rail not reachable"
 
+            evaluate(
+                "(() => { const tab = document.getElementById('settings-tab-general');"
+                " tab?.focus(); tab?.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true})) })()"
+            )
+            deadline = time.time() + 10
+            settings_keyboard_ok = False
+            while time.time() < deadline:
+                settings_keyboard_ok = bool(
+                    evaluate(
+                        "document.getElementById('settings-tab-voice')?.getAttribute('aria-selected') === 'true'"
+                        " && document.activeElement?.id === 'settings-tab-voice'"
+                    )
+                )
+                if settings_keyboard_ok:
+                    break
+                time.sleep(0.3)
+            assert settings_keyboard_ok, "Settings rail keyboard navigation did not select Voice"
+
             evaluate("document.querySelector('.sheet-head .icon-btn')?.click()")
             time.sleep(0.4)
             evaluate(
