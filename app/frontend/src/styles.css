@@ -409,8 +409,8 @@ svg.icon { display: block; flex: 0 0 auto; }
 .sheet-head h2 { flex: 1; margin: 0; font-family: var(--display); font-size: 21px; font-weight: 550; }
 .sheet-body { padding: 20px; overflow-y: auto; }
 .sheet-foot { display: flex; justify-content: flex-end; gap: 9px; padding: 15px 20px; border-top: 1px solid var(--border); }
-.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) 205px; min-height: 0; flex: 1; }
-.settings-nav { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: 3px; padding: 14px 10px; border-left: 1px solid var(--border); background: var(--sidebar); }
+.settings-layout { display: grid; grid-template-columns: 205px minmax(0, 1fr); min-height: 0; flex: 1; }
+.settings-nav { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 3px; padding: 14px 10px; border-right: 1px solid var(--border); background: var(--sidebar); }
 .settings-nav-heading { display: grid; gap: 2px; padding: 4px 9px 10px; }
 .settings-nav-heading span { color: var(--text); font-size: 13px; font-weight: 720; letter-spacing: 0.01em; }
 .settings-nav-heading small { color: var(--faint); font-size: 11px; }
@@ -424,7 +424,7 @@ svg.icon { display: block; flex: 0 0 auto; }
 .settings-tab-chevron { color: var(--faint); opacity: 0; transition: opacity 200ms var(--ease), transform 200ms var(--ease); }
 .settings-tab:hover .settings-tab-chevron, .settings-tab.active .settings-tab-chevron { opacity: 1; }
 .settings-tab.active .settings-tab-chevron { color: var(--brand); transform: translateX(1px); }
-.settings-content { grid-column: 1; grid-row: 1; padding: 22px; overflow-y: auto; }
+.settings-content { grid-column: 2; grid-row: 1; padding: 22px; overflow-y: auto; }
 .settings-content h3 { margin: 0 0 5px; font-size: 17px; }
 .settings-content h4 { margin: 20px 0 8px; font-size: 13px; }
 .section-copy { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
@@ -466,7 +466,7 @@ svg.icon { display: block; flex: 0 0 auto; }
 .simple-page, .settings-content { max-width: 760px; }
 .simple-page { width: 100%; margin-inline: auto; }
 .simple-stack { display: grid; gap: 16px; max-width: 640px; }
-.settings-layout { grid-template-columns: minmax(0, 1fr) 232px; }
+.settings-layout { grid-template-columns: 232px minmax(0, 1fr); }
 .settings-nav { padding: 16px 12px; background: var(--bg-raise); }
 .settings-tab { min-height: 46px; border-radius: 10px; }
 .settings-content { padding: 26px 28px 30px; }

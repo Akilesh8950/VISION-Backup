@@ -312,11 +312,11 @@ remote URL → privacy/feedback choice (default off) → Extensions intro (can s
 
 ## 12. Settings information architecture and confidentiality
 
-Settings is a deliberately quiet tabbed sheet. On desktop widths its content
-stays on the left and the section list is a descriptive right-hand rail with
-a clear active section and chevron; it does not compete visually with the
-premium chat transcript. At 900 px and below, that same list becomes a
-scrollable top bar. The tabs are exactly:
+Settings is a deliberately quiet tabbed sheet. On desktop widths its section
+list is a descriptive left-hand rail with a clear active section and chevron,
+and the selected content appears on the right; it does not compete visually
+with the premium chat transcript. At 900 px and below, that same list becomes
+a scrollable top bar. The tabs are exactly:
 
 - General: appearance, active project, automatic local-server start and the
   connected-tool cap under Advanced.
