@@ -11,6 +11,11 @@ export default defineConfig({
     outDir: webDir,
     emptyOutDir: true,
     assetsDir: 'assets',
+    // WebView2/Chromium is a modern evergreen runtime, so avoid legacy
+    // transpilation helpers and the modulepreload polyfill: both only add
+    // bytes and parse time to a locally loaded desktop bundle.
+    target: 'es2022',
+    modulePreload: { polyfill: false },
     // Release bundles are minified and deliberately have no source maps.
     minify: true,
     cssMinify: true,

@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [react()],
   base: './',
   build: {
+    target: 'es2022',
     outDir: '/tmp/vision-demo-dist',
     emptyOutDir: true,
     assetsDir: 'assets',

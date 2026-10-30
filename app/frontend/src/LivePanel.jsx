@@ -414,7 +414,7 @@ export function LivePanel({
 
         {frame ? (
           <div className="live-frame-preview">
-            <img src={frame.data_url} alt="Preview of the one screen frame you captured" />
+            <img src={frame.data_url} alt="Preview of the one screen frame you captured" decoding="async" />
             <div>
               <strong>One screen frame · {frame.width}×{frame.height}</strong>
               <p>{vision.available

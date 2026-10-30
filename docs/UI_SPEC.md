@@ -448,10 +448,21 @@ groups persist across launches.
 
 ### Motion
 
-- Enter/hover/press feedback is 120–200 ms, transform/opacity only.
-  **Settings → General → Reduce animations** (and the OS reduced-motion
-  setting, and Low-end CPU performance mode) calm or remove animations
-  app-wide; spinners keep signalling activity.
+- Enter/hover/press feedback is 120–320 ms, transform/opacity only, from
+  shared easing/duration tokens (including a gentle spring for sheets,
+  menus, and toasts). The empty-chat hero staggers in with a slowly
+  floating logo, suggestion cards cascade, Settings tabs/content ease
+  between sections, the Chat/Agent toggle slides its pill, and Send
+  grows as soon as there is text to send. **Settings → General → Reduce
+  animations** (and the OS reduced-motion setting, and Low-end CPU
+  performance mode) calm or remove animations app-wide — including the
+  hero float and every stagger; spinners keep signalling activity.
+- Long chats stay smooth: past 24 messages, entrance animations stop and
+  off-screen rows skip layout/paint (`content-visibility`) with their
+  real heights remembered, so scrolling hundreds of messages does not
+  move the scrollbar or stall on small PCs. Vision Live loads on first
+  use instead of at startup, and the floating mini never loads the full
+  chat app.
 
 ## 19. Vision Live
 

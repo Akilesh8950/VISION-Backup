@@ -903,6 +903,23 @@ OS `prefers-reduced-motion`, **Low-end CPU** perf mode (blur removed,
 entrance animations skipped, slower spinner), and a manual **Reduce
 animations** toggle (Settings → General, `reduce_motion` in config).
 
+A later motion/performance pass unified easing and duration tokens
+(`--ease`, `--ease-spring`, `--dur-*`), added staggered hero/suggestion
+and Settings entrances, spring-timed sheets/menus/toasts, a sliding
+Chat/Agent indicator (transform-only), and per-tab Settings content
+transitions — all disabled or shortened by the three calm modes above.
+Vision Live is now a lazy chunk that mounts on first activation and then
+stays mounted so floating-mini commands keep reaching the microphone
+owner; the entry point also lazy-loads App vs. the Live mini so each
+window parses only its own surface.  Tool/widget cards use layout/style
+containment, and past 24 messages rows additionally get
+`content-visibility: auto` with remembered intrinsic sizes.
+`scripts/bench_ui.py` (Chrome/CDP, optional 4× CPU throttle) is the
+repeatable gate: on the audit machine the 366-row synthetic transcript's
+cumulative layout/style time fell by roughly 58–60% versus the pre-pass
+build at both normal and 4×-throttled CPU, with zero dropped frames in
+the sampled sidebar/scroll runs.
+
 ## 18. Vision Live: local push-to-talk voice and gated screen frames
 
 Vision Live adds two user-requested modes without changing the frozen

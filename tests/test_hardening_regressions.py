@@ -635,7 +635,7 @@ def test_frontend_simple_settings_sidebar_and_release_protections_are_present():
     assert "Used in" in library and "Attach to message" in library
     assert "thumbnail" in library and "virtual-spacer" in library
     assert "--sidebar-w: 260px" in styles and "--sidebar-c: 64px" in styles
-    assert "transition: grid-template-columns 200ms" in styles
+    assert "transition: grid-template-columns 260ms" in styles
     assert "transition: transform 200ms" in styles
     assert "Saved address hidden" in app
     assert "earlyByType" in bridge

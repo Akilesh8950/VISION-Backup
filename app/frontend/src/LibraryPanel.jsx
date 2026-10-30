@@ -51,7 +51,7 @@ const LibraryRow = memo(function LibraryRow({
   return (
     <article className="library-item">
       <div className={`library-thumb kind-${item.kind || 'file'}`} aria-hidden="true">
-        {item.thumbnail ? <img src={item.thumbnail} alt="" /> : <><Icon name={iconForKind(item.kind)} size={21} /><span>{extensionLabel(item)}</span></>}
+        {item.thumbnail ? <img src={item.thumbnail} alt="" decoding="async" /> : <><Icon name={iconForKind(item.kind)} size={21} /><span>{extensionLabel(item)}</span></>}
       </div>
       <div className="library-item-main">
         {editing ? (

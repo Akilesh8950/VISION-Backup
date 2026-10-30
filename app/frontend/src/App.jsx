@@ -6,11 +6,15 @@ import { Sidebar } from './Sidebar.jsx'
 import { systemStatusPayload } from './widgetData.js'
 import { demoConversations, demoLibrary, demoMessages, demoProjects, demoServer, demoUpdates } from './demo.js'
 import { DEFAULT_TTS, SAMPLE_TEXT, VOICE_STYLES, listVoices, loadVoices, normalizeTts, pickVoice, rankVoices, speechAvailable, styleGender, voiceEngine, voiceOptionLabel } from './voice.js'
-import { LivePanel } from './LivePanel.jsx'
 import { STT_LANGUAGE_OPTIONS, normalizeLiveCapabilities } from './live.js'
 
 const GenWidget = lazy(() => import('./widgets.jsx').then((module) => ({ default: module.GenWidget })))
 const LibraryPanel = lazy(() => import('./LibraryPanel.jsx'))
+// Vision Live (recorder, orb, panel, mini sync) is only needed after the
+// user opens Live or a floating mini already exists, so it stays out of
+// the critical first-paint bundle. App keeps it mounted once activated
+// because the mini sends its commands through this component.
+const LivePanel = lazy(() => import('./LivePanel.jsx').then((module) => ({ default: module.LivePanel })))
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`
 
@@ -337,7 +341,7 @@ const Composer = memo(function Composer({ value, setValue, onSubmit, streaming, 
           {onOpenLive ? <button type="button" className="attach-btn live-composer-btn" title="Open Vision Live voice chat" aria-label="Open Vision Live" onClick={onOpenLive}><Icon name="live" size={17} /></button> : null}
           <span className="model-chip" title={endpoint.label || endpoint.kind}><span className={`dot ${endpoint.cloud ? 'warn' : 'healthy'}`} />{endpoint.cloud ? 'CLOUD' : 'LOCAL'}</span>
           {onToggleAgent ? (
-            <span className="mode-toggle" role="group" aria-label="Response mode">
+            <span className={`mode-toggle${agentMode ? ' is-agent' : ''}`} role="group" aria-label="Response mode">
               <button type="button" className={!agentMode ? 'active' : ''} onClick={() => onToggleAgent(false)}>Chat</button>
               <button type="button" className={agentMode ? 'active agent' : ''} title="Agent mode: VISION plans and works through the goal step by step with tools. Safe actions run without asking each time; risky actions still ask. Stop anytime." onClick={() => onToggleAgent(true)}>Agent</button>
             </span>
@@ -536,6 +540,9 @@ export default function App() {
   const [ttsVoices, setTtsVoices] = useState(() => listVoices())
   const [speakingKey, setSpeakingKey] = useState(null)
   const [liveOpen, setLiveOpen] = useState(false)
+  // Sticky once Live (or its floating mini) has been used: the lazy panel
+  // must stay mounted so mini commands keep reaching the microphone owner.
+  const [liveActivated, setLiveActivated] = useState(false)
   const [liveCapabilities, setLiveCapabilities] = useState(() => normalizeLiveCapabilities(null, false))
   const [reduceMotion, setReduceMotion] = useState(() => storageGet('vision.reduceMotion') === '1')
   // At or below 900px the sidebar becomes the icon rail regardless of the
@@ -563,6 +570,9 @@ export default function App() {
   const effectiveCollapsed = collapsed || narrow
 
   useEffect(() => { nativeRef.current = native }, [native])
+  useEffect(() => {
+    if (normalizeLiveCapabilities(liveCapabilities, native).mini_open) setLiveActivated(true)
+  }, [liveCapabilities, native])
   useEffect(() => { streamingRef.current = streaming }, [streaming])
   useEffect(() => { currentIdRef.current = currentId }, [currentId])
   useEffect(() => { document.documentElement.dataset.theme = theme; storageSet('vision.theme', theme) }, [theme])
@@ -620,6 +630,7 @@ export default function App() {
   }, [])
 
   const openLive = useCallback(() => {
+    setLiveActivated(true)
     setLiveOpen(true)
     refreshLiveCapabilities()
   }, [refreshLiveCapabilities])
@@ -1710,25 +1721,29 @@ export default function App() {
         })}
       </aside>
 
-      <LivePanel
-        open={liveOpen}
-        onClose={() => setLiveOpen(false)}
-        onOpenRequest={() => setLiveOpen(true)}
-        native={native}
-        capabilities={liveCapabilities}
-        onRefreshCapabilities={refreshLiveCapabilities}
-        callApi={callApi}
-        pushToast={pushToast}
-        messages={messages}
-        streaming={streaming}
-        speakingKey={speakingKey}
-        ttsPrefs={ttsPrefs}
-        onSendLive={sendLiveText}
-        onLiveTurnStarted={(key, muted) => { liveSpeechRef.current = { key: String(key || ''), muted: Boolean(muted) } }}
-        onStopGeneration={stopGeneration}
-        onOpenVoiceSettings={() => openSettings('voice')}
-        task={task}
-      />
+      {(liveActivated || liveOpen) ? (
+        <Suspense fallback={liveOpen ? <div className="overlay live-overlay"><div className="live-panel" role="status" aria-live="polite"><div className="widget-loading"><span className="spinner" />Opening Vision Live…</div></div></div> : null}>
+          <LivePanel
+            open={liveOpen}
+            onClose={() => setLiveOpen(false)}
+            onOpenRequest={() => { setLiveActivated(true); setLiveOpen(true) }}
+            native={native}
+            capabilities={liveCapabilities}
+            onRefreshCapabilities={refreshLiveCapabilities}
+            callApi={callApi}
+            pushToast={pushToast}
+            messages={messages}
+            streaming={streaming}
+            speakingKey={speakingKey}
+            ttsPrefs={ttsPrefs}
+            onSendLive={sendLiveText}
+            onLiveTurnStarted={(key, muted) => { liveSpeechRef.current = { key: String(key || ''), muted: Boolean(muted) } }}
+            onStopGeneration={stopGeneration}
+            onOpenVoiceSettings={() => openSettings('voice')}
+            task={task}
+          />
+        </Suspense>
+      ) : null}
 
       {libraryOpen ? (
         <Suspense fallback={<div className="library-panel open library-loading"><span className="spinner" />Loading library…</div>}>
@@ -1821,7 +1836,7 @@ export default function App() {
                   <div><strong>Private by design</strong><small>Sensitive details stay tucked away until you open them.</small></div>
                 </div>
               </nav>
-              <div id="settings-panel" className="settings-content" role="tabpanel" aria-labelledby={`settings-tab-${settingsTab}`}>
+              <div key={settingsTab} id="settings-panel" className="settings-content" role="tabpanel" aria-labelledby={`settings-tab-${settingsTab}`}>
                 {!form ? <p className="empty-note">Loading settings…</p> : settingsTab === 'general' ? (
                   <><h3>General</h3><p className="section-copy">The everyday options, in one quiet place.</p><div className="simple-stack">
                     <div className="field"><label>Appearance</label><select className="select" value={form.theme} onChange={(e) => { setForm({ ...form, theme: e.target.value }); setTheme(e.target.value) }}><option value="dark">Dark</option><option value="light">Light</option></select></div>

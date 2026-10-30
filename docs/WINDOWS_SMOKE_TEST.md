@@ -27,7 +27,7 @@ as a defect with the exact error text.
 Use a new folder and a Python 3.11 virtual environment:
 
 ```powershell
-git clone <repository-url> VISION-smoke
+git clone https://github.com/Akilesh8950/VISION.git VISION-smoke
 cd VISION-smoke
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -35,6 +35,11 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install -e . --no-deps
 ```
+
+Offline alternative: copy `VISION-1.0.0.bundle` (and verify it against
+`VISION-1.0.0-transfer.sha256`) to the Windows PC, then replace the clone
+above with `git clone VISION-1.0.0.bundle VISION-smoke`. Record
+`git log -1 --oneline` either way so the tested commit is unambiguous.
 
 Confirm the installed bridge dependency and entry point resolve:
 
@@ -76,7 +81,8 @@ git status --short app\web app\frontend
 ```
 
 The build must complete without errors and rewrite `app\web` with
-`index.html`, one referenced JavaScript bundle, one referenced CSS bundle,
+`index.html` (referencing one entry JavaScript file and one CSS file), the
+lazy JS chunks under `assets\` (App, Vision Live, widgets, Item Library),
 `screenshots.html` and `licenses\`. Confirm there are no `.map`, `.jsx`,
 `.ts`, `.tsx` or `package.json` files under `app\web`. Record any unexpected
 generated-file diff before testing a release candidate.
@@ -385,12 +391,24 @@ dataset and local rows clear after success. Repeat
    composer, sidebar, tool cards, sheets and confirmation buttons are
    reachable. Esc closes the top sheet/palette/inspector before it stops a
    stream.
+4. Motion and long-chat performance: collapse/expand the sidebar, switch
+   Chat↔Agent (the toggle pill should slide, not jump), open/close Settings
+   and switch its tabs, and open Vision Live for the first time (its lazy
+   chunk must load from the packaged bundle with no blank window). Open the
+   longest chat available (or generate 30+ messages) and scroll top→bottom:
+   scrolling must stay smooth with no white flashes or scrollbar jumps.
+   Then enable **Settings → General → Reduce animations** and
+   **Settings → Model → Low-end CPU** in turn and confirm the hero logo
+   stops floating, staggered entrances disappear, and every control above
+   still works instantly.
 
 ## 13. Packaged build
 
 `build.ps1` packages the committed `app\web` React output and does not invoke
 Node. If `app\frontend` changed since the last frontend build, first complete
-the optional rebuild in section 2. Then run:
+the optional rebuild in section 2. Keep the section 1 virtual environment
+activated for sections 13–14 (the scripts call plain `python`), or pass
+`-Python .\.venv\Scripts\python.exe` explicitly. Then run:
 
 ```powershell
 .\scripts\build.ps1

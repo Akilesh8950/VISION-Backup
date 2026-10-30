@@ -91,6 +91,41 @@ def test_responsive_shell_contract_covers_tiny_short_and_ultrawide_windows():
     assert ".live-mini-app { height: 100dvh;" in styles
 
 
+def test_motion_and_performance_contract():
+    styles = (FRONTEND_SRC / "styles.css").read_text(encoding="utf-8")
+    app = (FRONTEND_SRC / "App.jsx").read_text(encoding="utf-8")
+    main = (FRONTEND_SRC / "main.jsx").read_text(encoding="utf-8")
+    vite_config = (FRONTEND / "vite.config.js").read_text(encoding="utf-8")
+
+    # Entry splitting: the main window and the floating mini parse only
+    # their own surface, and Vision Live's recorder/panel code loads on
+    # first activation instead of at startup.
+    assert "const App = lazy(() => import('./App.jsx'))" in main
+    assert "const LiveMiniApp = lazy(" in main
+    assert "const LivePanel = lazy(" in app
+    assert "import { LivePanel } from './LivePanel.jsx'" not in app
+    assert "liveActivated" in app  # sticky mount keeps mini commands working
+    assert "target: 'es2022'" in vite_config
+    assert "modulePreload: { polyfill: false }" in vite_config
+
+    # Motion system: shared tokens, sliding Chat/Agent pill, spring
+    # entrances, and hero float — all transform/opacity based.
+    assert "--ease-spring:" in styles
+    assert "@keyframes float-soft" in styles
+    assert "@keyframes content-in" in styles
+    assert "@keyframes toast-in" in styles
+    assert ".mode-toggle.is-agent::before" in styles
+    assert "is-agent" in app
+
+    # Long-transcript rendering budget + containment. The calm modes must
+    # still be able to switch the decorative motion off.
+    assert "content-visibility: auto" in styles
+    assert "contain-intrinsic-size: auto 180px" in styles
+    assert ".tool-card {" in styles and "contain: layout style" in styles
+    assert ".perf-low .hero .logo-mark" in styles
+    assert (ROOT / "scripts" / "bench_ui.py").is_file()
+
+
 def test_bridge_state_settings_and_secret_redaction(tmp_path):
     api = make_api(tmp_path)
     state = api.get_state()

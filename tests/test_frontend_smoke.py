@@ -197,6 +197,62 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                 time.sleep(0.4)
             assert chat_menu_ok, "professional chat-history menu not reachable"
 
+            # Motion contract: the Chat/Agent toggle slides its indicator
+            # (transform on the ::before pill) instead of swapping colours.
+            evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))")
+            time.sleep(0.3)
+            evaluate(
+                "[...document.querySelectorAll('.mode-toggle button')]"
+                ".find((b) => b.textContent.trim() === 'Agent')?.click()"
+            )
+            deadline = time.time() + 10
+            mode_slide_ok = False
+            while time.time() < deadline:
+                mode_slide_ok = bool(
+                    evaluate(
+                        "(() => { const t = document.querySelector('.mode-toggle'); if (!t) return false;"
+                        " const transform = getComputedStyle(t, '::before').transform;"
+                        " return t.classList.contains('is-agent') && transform.startsWith('matrix') })()"
+                    )
+                )
+                if mode_slide_ok:
+                    break
+                time.sleep(0.3)
+            assert mode_slide_ok, "Chat/Agent sliding indicator did not engage"
+            evaluate(
+                "[...document.querySelectorAll('.mode-toggle button')]"
+                ".find((b) => b.textContent.trim() === 'Chat')?.click()"
+            )
+            time.sleep(0.3)
+
+            # Lazy Vision Live: the panel chunk must load on first open and
+            # render its real controls (not just the Suspense fallback),
+            # without widening the document.
+            evaluate("document.querySelector('.live-title-btn')?.click()")
+            deadline = time.time() + 25
+            live_ok = False
+            while time.time() < deadline:
+                live_ok = bool(
+                    evaluate(
+                        "Boolean(document.querySelector('.live-panel .live-talk'))"
+                        " && (document.querySelector('.live-panel')?.innerText || '').includes('Talk with VISION')"
+                        " && document.documentElement.scrollWidth <= window.innerWidth + 1"
+                    )
+                )
+                if live_ok:
+                    break
+                time.sleep(0.4)
+            assert live_ok, "lazy Vision Live panel did not open with push-to-talk controls"
+            evaluate("document.querySelector('button[aria-label=\"Close Vision Live\"]')?.click()")
+            deadline = time.time() + 10
+            live_closed = False
+            while time.time() < deadline:
+                live_closed = bool(evaluate("!document.querySelector('.live-panel')"))
+                if live_closed:
+                    break
+                time.sleep(0.3)
+            assert live_closed, "Vision Live panel did not close"
+
             # Responsive contract: from the 320x360 native floor through
             # laptop and ultrawide windows there is no sideways overflow,
             # the sidebar uses the intended rail/full width, and the
