@@ -863,32 +863,61 @@ inside conservative margins (1280×800 fallback when no display can be read).
 If a display is itself smaller than 320×360, the native minimum is lowered
 to that display instead of requesting an off-screen minimum.
 
-The icon rail is switched from React (`matchMedia('(max-width: 900px)')` →
+Normal resizing is **fluid sizing, not repositioning**.  The titlebar
+(40–50 px), full sidebar (about 215–300 px), icon rail (44–64 px), reading
+column (680–960 px in ordinary ratios), Settings rail (188–252 px), hero,
+composer, sheets, panels, cards, controls, and Vision Live orb use
+continuous `dvw`/`dvh`/`dvmin` clamps.  The labelled sidebar therefore
+remains on the left and simply becomes narrower from 1100 px down to
+681 px; Settings likewise keeps its professional left rail and gives up
+only secondary hints/pills at narrower widths.  There are no stepped
+1700 px or 2300 px geometry jumps.  A separate aspect-excess expression
+widens the reading/hero-composer columns toward 1120 px only as a window
+becomes wider than 21:9; its `25dvw - 58.333dvh` term is zero at exactly
+21:9, so crossing that ratio by changing either dimension is itself
+continuous.  While a resize is in progress, React adds `.window-resizing`
+for about 160 ms after the last resize event and suppresses workspace and
+side-panel geometry transitions so elements track the frame instead of
+lagging behind an animation.  The composer textarea reads its current CSS
+height cap rather than assuming the tall-window maximum.
+
+The one structural width switch is **680 px**.  The icon rail is switched
+from React (`matchMedia('(max-width: 680px)')` →
 `effectiveCollapsed = collapsed || narrow`) because `Sidebar.jsx` renders
-different rows for the rail; the earlier CSS-only media query squeezed the
-full sidebar into 64 px and clipped it.  The stored collapse preference is
-preserved (in a narrow window, toggling means "open when widened").  CSS
-breakpoints adapt layout only: ≥1700/≥2300 wider sidebar and reading column;
-≤1100 padding/type; ≤900 rail + Settings top tabs + single-column forms;
-≤720 full-bleed sheets/panels; ≤540 compact chrome/type and fixed wrapping
-tables; ≤420 a 56 px rail and wrapping composer controls; ≤360 a 50 px rail;
-≤300 a 44 px rail with Send kept on the first composer row; and
-`max-height` 620/460/380 compact modes for short windows.
+different rows for the rail; below that width a labelled sidebar plus a
+usable reading column, or a left Settings rail plus readable form content,
+no longer fit, so Settings sections move to the horizontal top tab bar at
+the same threshold.  The stored collapse preference is preserved (in a
+narrow window, toggling means "open when widened").  Smaller breakpoints
+only drop or wrap secondary detail as space truly runs out: ≤720 status
+cards and extension cards stack; ≤540 forms become one column and tables
+use fixed wrapping; ≤420 server/model/token/keyboard-hint chrome yields so
+composer controls stay in order; ≤360/≤300 keep tiny-window ordering and
+internal scrolling.  Most short-window sizing is continuous in `dvh`;
+620/460/380 px height rules now mainly reserve palette space or hide hero
+secondary copy when there is no vertical room for it.
 
 A later viewport audit found a hidden ~386 px layout floor below the old
 520 px test.  It was fixed at the root with an explicit
 `minmax(0, 1fr)` app column, `min-width: 0`/overflow constraints through
 the shell and transcript, and a shrinkable/wrapping composer row; tables,
 diffs, dialogs, and side panels now wrap or scroll internally instead of
-widening the app.  Verified with Chrome/CDP at 320×340, 320×360, 320×480,
-360×640, 400×700, 520×460, 800×480, 899×600, 901×600, 1024×600, 1366×768,
-1440×900, 1920×1080, 2560×1080, 3840×2160, and 600×1000 with zero document
-horizontal overflow.  Settings, Vision Live, Sources, Item Library, the
-command palette, and the empty-chat hero were also checked at 320×360, and
-the floating Live mini at 240×260.  The selected viewport matrix and
-320×360 Voice-picker reachability are locked in by
-`tests/test_frontend_smoke.py`; display-size calculations are unit-tested in
-`tests/test_web_ui.py`.
+widening the app.  The fluid pass was measured before/after with
+Chrome/CDP.  At 800 px height the measured sidebar now moves
+300 → 299.9 → 295.3 → 286 → 276.7 px at 2560/2300/2200/2000/1800 px wide,
+and 238.4 → 238.3 px across 901 → 900 px (the previous 900 px rail jump is
+gone); titlebar height now changes proportionally through short windows.
+The aspect matrix covered 320×1000, 420×1200, 600×1200, 1080×1920,
+480×480, 800×800, 800×360, 1200×360, 1600×360, 2048×420, 2560×720,
+3440×1440, 5120×1440, and 3840×2160 with zero document horizontal
+overflow and composer/send controls inside the window.  Settings was
+visually and geometrically checked with its rail still left at 681 px and
+as top tabs at 680 px; Vision Live and the floating mini were checked at
+800×360 and 240×260.  The selected viewport matrix, sidebar widths,
+collapsed-state expectations, 681/680 Settings positions, transient
+resize class, and 320×360 Voice-picker reachability are locked in by
+`tests/test_frontend_smoke.py`; fluid/static contracts and display-size
+calculations are unit-tested in `tests/test_web_ui.py`.
 
 ### 17.3 Motion performance
 

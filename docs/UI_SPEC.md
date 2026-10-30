@@ -10,9 +10,10 @@ Implementation supersession: the shipping default UI is an original offline
 React/WebView2 interpretation of the sidebar, centered transcript, floating
 composer, reasoning/tool disclosure and work-surface patterns in this spec.
 It uses warm graphite/ivory flat surfaces, custom SVG icons and no CSS/canvas
-gradients. The current shell is a 260 px sidebar that collapses to a 64 px
-icon rail, with Pinned chats, collapsible Project groups, a virtualized chat
-history, an Item Library for uploads, and a seven-tab Settings sheet. Current
+gradients. The current shell is a fluid sidebar (about 215–300 px expanded;
+44–64 px as an icon rail), with Pinned chats, collapsible Project groups, a
+virtualized chat history, an Item Library for uploads, and a seven-tab
+Settings sheet. Current
 captures are in `docs/screenshots/react-*.png`; the Qt implementation remains
 the `--qt` rollback surface.
 
@@ -70,9 +71,11 @@ to copy.
 
 ### Layout rules
 
-- Sidebar is 260 px expanded and 64 px collapsed. The VISION logo is the
-  expand/collapse toggle in both states, transitions run for 200 ms, and the
-  chosen state persists across launches.
+- Sidebar width is fluid: about 260 px at ordinary laptop widths, shrinking
+  to about 215 px before the 680 px structural rail switch and growing to
+  300 px on large monitors; the rail itself is 44–64 px. The VISION logo is
+  the expand/collapse toggle in both states, the shell transition runs for
+  260 ms, and the chosen state persists across launches.
 - Transcript text has a maximum readable width; tables/charts may use a wider
   region or move to the work panel.
 - The work panel is hidden by default, opens for a chart/table/diff/resource,
@@ -88,7 +91,7 @@ to copy.
 - **New chat** button. When a project filter or project group supplies the
   action, the new conversation starts in that project.
 - Search across local conversation titles and text. In the icon rail, Search
-  expands the sidebar and focuses the search field after the 200 ms shell
+  expands the sidebar and focuses the search field after the 260 ms shell
   transition.
 - A project filter offers All projects, No project, or one project, plus a
   create-project action. The filter and each project group's collapsed state
@@ -342,8 +345,8 @@ results behind details. Source and Activity surfaces show titles, hosts and
 filenames rather than full URLs, local paths or raw backend payloads.
 
 The main conversation sidebar uses the VISION logo as its explicit
-expand/collapse toggle. The expanded 260 px form shows labels, search,
-project controls and the virtualized conversation list; the 64 px icon rail
+expand/collapse toggle. The expanded fluid form shows labels, search,
+project controls and the virtualized conversation list; the fluid icon rail
 retains New chat, Search, recent/pinned chats, project shortcuts and footer
 actions with tooltips. Sidebar state, project filter and collapsed project
 groups persist across launches.
@@ -436,14 +439,24 @@ groups persist across launches.
 - Minimum native window 320×360. The first launch size is fitted to the
   primary display instead of always opening at 1440×920, so smaller laptop
   and scaled Windows desktops do not start with VISION partly off-screen.
-  At ≤900 px the sidebar becomes the icon rail automatically (the user's
-  saved preference returns when the window widens) and Settings tabs become
-  a scrollable top bar. At ≤720 px dialogs and side panels go full-width;
-  at ≤420/≤360 px the rail, title bar, messages, and composer compact or
-  wrap while Attach, Live, Chat/Agent, and Send remain reachable. Short
-  windows use additional 620/460/380 px height modes. Large and ultrawide
-  monitors widen the sidebar and reading column without stretching prose
-  indefinitely. The app shell has no horizontal page scrolling; long
+  During ordinary resizing, elements keep their positions and change size:
+  titlebar height, sidebar/rail widths, reading column, typography,
+  composer, hero, sheets, side panels, cards, controls, Settings rail, and
+  Vision Live orb all use continuous width/height-based clamps.  From
+  1100 px down to 681 px the labelled sidebar and left Settings rail stay
+  exactly where they are and become narrower/denser.  Only at ≤680 px—
+  where labels plus usable content no longer fit—does the sidebar become
+  the icon rail automatically (the user's saved preference returns when
+  the window widens) and Settings sections become a scrollable top bar.
+  At ≤540 px forms become one column; at ≤420/≤360 px secondary chrome
+  yields and controls compact or wrap while Attach, Live, Chat/Agent, and
+  Send remain reachable. Short windows mostly shrink continuously with
+  height, with 620/460/380 px rules reserved for palette space and hiding
+  secondary hero copy. Large monitors widen continuously without
+  1700/2300 px jumps; windows wider than 21:9 can widen the reading column
+  toward 1120 px through a boundary-continuous aspect formula. Portrait,
+  square, short-wide, standard, ultrawide, and 4K windows all keep the same
+  shell arrangement. The app shell has no horizontal page scrolling; long
   transcripts, dialogs, tables, and panels scroll inside their own bounds.
 
 ### Motion

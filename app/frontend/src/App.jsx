@@ -315,10 +315,27 @@ const Composer = memo(function Composer({ value, setValue, onSubmit, streaming, 
   const areaRef = useRef(null)
   useEffect(() => {
     const node = areaRef.current
-    if (!node) return
-    node.style.height = 'auto'
-    node.style.height = `${Math.min(Math.max(node.scrollHeight, 28), 184)}px`
-    node.style.overflowY = node.scrollHeight > 184 ? 'auto' : 'hidden'
+    if (!node) return undefined
+    let frame = 0
+    const resize = () => {
+      frame = 0
+      node.style.height = 'auto'
+      const style = window.getComputedStyle(node)
+      const maxHeight = Number.parseFloat(style.maxHeight)
+      const minHeight = Number.parseFloat(style.minHeight) || 28
+      const limit = Number.isFinite(maxHeight) ? maxHeight : 184
+      node.style.height = `${Math.min(Math.max(node.scrollHeight, minHeight), limit)}px`
+      node.style.overflowY = node.scrollHeight > limit ? 'auto' : 'hidden'
+    }
+    const scheduleResize = () => {
+      if (!frame) frame = window.requestAnimationFrame(resize)
+    }
+    resize()
+    window.addEventListener('resize', scheduleResize, { passive: true })
+    return () => {
+      window.removeEventListener('resize', scheduleResize)
+      if (frame) window.cancelAnimationFrame(frame)
+    }
   }, [value])
   const tokens = Math.ceil(value.length / 4) + Math.ceil(attachments.reduce((sum, item) => sum + (Number(item.size) || 0), 0) / 4)
   return (
@@ -545,11 +562,15 @@ export default function App() {
   const [liveActivated, setLiveActivated] = useState(false)
   const [liveCapabilities, setLiveCapabilities] = useState(() => normalizeLiveCapabilities(null, false))
   const [reduceMotion, setReduceMotion] = useState(() => storageGet('vision.reduceMotion') === '1')
-  // At or below 900px the sidebar becomes the icon rail regardless of the
+  // Above 680px the labelled sidebar simply shrinks with the window. At or
+  // below that structural floor it becomes the icon rail regardless of the
   // stored preference, so snapped and very small windows stay usable.
-  const [narrow, setNarrow] = useState(() => { try { return window.matchMedia('(max-width: 900px)').matches } catch { return false } })
+  const [narrow, setNarrow] = useState(() => { try { return window.matchMedia('(max-width: 680px)').matches } catch { return false } })
+  const [windowResizing, setWindowResizing] = useState(false)
 
   const nativeRef = useRef(false)
+  const windowResizingRef = useRef(false)
+  const resizeSettleRef = useRef(0)
   const streamingRef = useRef(false)
   const currentIdRef = useRef('')
   const assistantKeyRef = useRef('')
@@ -596,12 +617,30 @@ export default function App() {
   }, [])
   useEffect(() => {
     let mq
-    try { mq = window.matchMedia('(max-width: 900px)') } catch { return undefined }
+    try { mq = window.matchMedia('(max-width: 680px)') } catch { return undefined }
     const update = () => setNarrow(mq.matches)
     update()
     if (mq.addEventListener) { mq.addEventListener('change', update); return () => mq.removeEventListener('change', update) }
     mq.addListener?.(update)
     return () => mq.removeListener?.(update)
+  }, [])
+  useEffect(() => {
+    const onResize = () => {
+      if (!windowResizingRef.current) {
+        windowResizingRef.current = true
+        setWindowResizing(true)
+      }
+      window.clearTimeout(resizeSettleRef.current)
+      resizeSettleRef.current = window.setTimeout(() => {
+        windowResizingRef.current = false
+        setWindowResizing(false)
+      }, 160)
+    }
+    window.addEventListener('resize', onResize, { passive: true })
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.clearTimeout(resizeSettleRef.current)
+    }
   }, [])
 
   const pushToast = useCallback((message, kind = 'info') => {
@@ -1610,7 +1649,7 @@ export default function App() {
   const liveCaps = normalizeLiveCapabilities(liveCapabilities, native)
 
   return (
-    <div className={`app${(hardware?.effective_profile || config?.performance_profile) === 'low_end' ? ' perf-low' : ''}${reduceMotion ? ' motion-reduced' : ''}`}>
+    <div className={`app${(hardware?.effective_profile || config?.performance_profile) === 'low_end' ? ' perf-low' : ''}${reduceMotion ? ' motion-reduced' : ''}${windowResizing ? ' window-resizing' : ''}`}>
       <header className="titlebar pywebview-drag-region">
         <div className="title-left">
           {effectiveCollapsed ? (

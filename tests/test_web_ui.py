@@ -69,6 +69,7 @@ def test_main_window_geometry_fits_primary_display():
 
 def test_responsive_shell_contract_covers_tiny_short_and_ultrawide_windows():
     styles = (FRONTEND_SRC / "styles.css").read_text(encoding="utf-8")
+    app = (FRONTEND_SRC / "App.jsx").read_text(encoding="utf-8")
     bridge_source = (ROOT / "src/vision_app/web_bridge.py").read_text(encoding="utf-8")
 
     assert "MAIN_WINDOW_MIN_SIZE = (320, 360)" in bridge_source
@@ -81,14 +82,47 @@ def test_responsive_shell_contract_covers_tiny_short_and_ultrawide_windows():
     assert "grid-template-columns: minmax(0, 1fr)" in styles
     assert ".composer-row { display: flex;" in styles
     assert ".composer-row .grow { flex: 1 1 0; min-width: 0; }" in styles
+
+    # Normal resizing changes dimensions, not positions: shell geometry is
+    # driven by continuous dvw/dvh/dvmin clamps. The only structural width
+    # switch is 680px, where labelled navigation no longer fits beside a
+    # usable content column. In particular, the old 900px rail switch and
+    # the stepped 1700/2300px large-monitor jumps must not come back.
+    assert "--titlebar: clamp(40px, calc(27px + 3.7dvh), 50px)" in styles
+    assert "--sidebar-w: clamp(260px, calc(193px + 4.65dvw), 300px)" in styles
+    assert "--sidebar-c: clamp(44px, calc(18px + 10dvw), 64px)" in styles
+    assert "--read: clamp(680px, calc(489px + 20.5dvw), 960px)" in styles
+    assert "--sidebar-w: clamp(210px, calc(142px + 10.7dvw), 260px)" in styles
+    assert "matchMedia('(max-width: 680px)')" in app
+    assert "matchMedia('(max-width: 900px)')" not in app
+    assert "@media (max-width: 680px)" in styles
+    assert "@media (min-width: 1700px)" not in styles
+    assert "@media (min-width: 2300px)" not in styles
+
+    # Any aspect ratio: short/tiny fallbacks remain, while the 21:9 rule is
+    # an aspect-excess formula. At the exact ratio boundary the dvw/dvh
+    # terms cancel and it evaluates to the ordinary fluid width, so merely
+    # crossing 21:9 cannot create a jump.
     assert "@media (max-width: 420px)" in styles
     assert "@media (max-width: 360px)" in styles
     assert "@media (max-width: 300px)" in styles
     assert "@media (max-height: 460px)" in styles
     assert "@media (max-height: 380px)" in styles
-    assert "@media (min-width: 1700px)" in styles
-    assert "@media (min-width: 2300px)" in styles
+    assert "@media (min-aspect-ratio: 21/9)" in styles
+    assert "25dvw - 58.333dvh" in styles
+    assert "font-size: clamp(13.5px, calc(12.6px + 0.18dvw), 15px)" in styles
+    assert ".live-orb" in styles and "min(34dvw, 20dvh)" in styles
     assert ".live-mini-app { height: 100dvh;" in styles
+
+    # While the native frame is being dragged, geometry tracks the pointer
+    # instead of lagging behind the deliberate sidebar/panel transitions.
+    assert "const [windowResizing, setWindowResizing]" in app
+    assert "window.addEventListener('resize', onResize, { passive: true })" in app
+    assert "window-resizing" in app and ".app.window-resizing .workspace" in styles
+    # The auto-growing textarea asks CSS for its current fluid cap rather
+    # than hard-coding the tall-window maximum in JavaScript.
+    assert "window.getComputedStyle(node)" in app
+    assert "Number.parseFloat(style.maxHeight)" in app
 
 
 def test_motion_and_performance_contract():

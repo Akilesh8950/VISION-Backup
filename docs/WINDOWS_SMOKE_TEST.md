@@ -104,7 +104,8 @@ Then serve the production build as in section 3.2 and open
 `http://127.0.0.1:8000/index.html?gallery=1`. In the gallery, scroll the
 entire demo transcript and review:
 
-1. app frame, 260 px sidebar, custom window controls and floating composer;
+1. app frame, fluid sidebar (about 260 px at the review size), custom window
+   controls and floating composer;
 2. user bubbles, assistant text, collapsed reasoning and message actions;
 3. success tool cards with expandable arguments/results;
 4. system-status cards, chart, sortable table, timeline and side-by-side
@@ -219,10 +220,10 @@ Run each prompt in a new or clearly named chat.
    internally; Enter sends and Shift+Enter inserts a line.
 6. Press Ctrl+K. Run commands for New chat, Settings, Server console, theme,
    sidebar and an existing chat title.
-7. Click the VISION logo to collapse the sidebar. Confirm the expanded width
-   is 260 px, the rail is 64 px, the transition is smooth (200 ms), icons
-   remain usable, Search expands and focuses the field, and the state is
-   remembered after relaunch.
+7. Click the VISION logo to collapse the sidebar. At a standard 1440×900
+   window, confirm the expanded width is about 260 px, the rail is 64 px,
+   the transition is smooth (260 ms), icons remain usable, Search expands
+   and focuses the field, and the state is remembered after relaunch.
 8. Confirm a completed first exchange replaces **New chat** with a useful
    3–5 word title. Double-click the title to rename it inline. From the row
    `⋯` menu, pin/unpin it, move it to a Project and back to No project, and
@@ -381,8 +382,16 @@ dataset and local rows clear after success. Repeat
    desktop, confirm a fresh launch opens entirely inside the work area rather
    than at an off-screen fixed 1440×920. Resize continuously from the
    320×360 minimum through quarter/half snaps, a short wide window, and full
-   screen/maximized. At the minimum, open Settings, Vision Live, Item
-   Library, Sources, and Ctrl+K; confirm no clipped composer controls,
+   screen/maximized. During a slow width drag from desktop size down to
+   just above 680 px, confirm the sidebar, Settings section rail, hero,
+   transcript and composer stay in their normal places and mainly change
+   width/padding/font size; there must be no jump at 900, 1700 or 2300 px.
+   Confirm the sidebar becomes the icon rail and Settings becomes a top tab
+   bar only at about 680 px. During a slow height drag, confirm titlebar and
+   controls shrink proportionally rather than stepping. If the display and
+   window manager allow, also try portrait, square, very short-wide and
+   ultrawide/maximized shapes. At the minimum, open Settings, Vision Live,
+   Item Library, Sources, and Ctrl+K; confirm no clipped composer controls,
    titlebar/window buttons, Save footer, or sheet/panel close buttons, and
    that long content scrolls inside its panel instead of moving the app
    sideways. Resize the floating Live mini to 240×260 and confirm **Hold to

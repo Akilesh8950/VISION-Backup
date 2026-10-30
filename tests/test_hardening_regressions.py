@@ -606,11 +606,11 @@ def test_frontend_simple_settings_sidebar_and_release_protections_are_present():
     assert "SETTINGS_SECTION_GROUPS" in app and "settings-tab-icon" in app
     assert "settings-nav-group-label" in app and "settings-nav-footer" in app
     assert "Vision control center" in app and "settings-tab-copy" in app
-    assert "grid-template-columns: 252px minmax(0, 1fr)" in styles
+    assert "grid-template-columns: clamp(188px, calc(150px + 8dvw), 252px) minmax(0, 1fr)" in styles
     assert "grid-column: 1; grid-row: 1 / -1;" in styles
     # Read-aloud voice picker + JS-driven small-window rail (ARCHITECTURE §17).
     assert 'id="tts-voice-select"' in app and "from './voice.js'" in app
-    assert "matchMedia('(max-width: 900px)')" in app and "effectiveCollapsed" in app
+    assert "matchMedia('(max-width: 680px)')" in app and "effectiveCollapsed" in app
     assert "100dvh" in styles and "motion-reduced" in styles
     for label in ("Model & Server", "API & Connections"):
         assert label not in app
@@ -634,7 +634,8 @@ def test_frontend_simple_settings_sidebar_and_release_protections_are_present():
     assert "lazy(() => import('./widgets.jsx')" in app
     assert "Used in" in library and "Attach to message" in library
     assert "thumbnail" in library and "virtual-spacer" in library
-    assert "--sidebar-w: 260px" in styles and "--sidebar-c: 64px" in styles
+    assert "--sidebar-w: clamp(260px, calc(193px + 4.65dvw), 300px)" in styles
+    assert "--sidebar-c: clamp(44px, calc(18px + 10dvw), 64px)" in styles
     assert "transition: grid-template-columns 260ms" in styles
     assert "transition: transform 200ms" in styles
     assert "Saved address hidden" in app

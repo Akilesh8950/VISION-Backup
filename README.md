@@ -127,8 +127,9 @@ The premium reading/chat surface remains the focal point. Settings and other
 secondary sheets intentionally use a quieter, simpler layout: Settings is a
 tabbed sheet (General, Model, Tools, Library, Privacy, Updates, About), with paths,
 addresses, diagnostics and other technical controls collapsed under
-**Advanced**. The main 260 px conversation sidebar collapses to a remembered
-64 px icon rail when the VISION logo is clicked. It keeps Pinned chats first,
+**Advanced**. The main conversation sidebar is fluid (about 260 px at a
+standard laptop size) and collapses to a remembered fluid icon rail when the
+VISION logo is clicked. It keeps Pinned chats first,
 groups chats under collapsible Projects, filters by project, virtualizes long
 histories, auto-names a chat from its first exchange, and exposes rename,
 pin, move-to-project and delete actions from each row. Uploaded files persist

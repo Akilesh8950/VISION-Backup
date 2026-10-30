@@ -29,9 +29,11 @@ VISION — built by SPIRIT ORG
 - **Three update channels** (app, model, config) — the app never updates
   silently; it asks, downloads in the background, and applies on restart
   with rollback protection.
-- **Fits any window:** from a 320×360 snapped window to ultrawide and 4K
-  monitors, with a calm motion system that fully respects Windows
-  reduced-motion settings and a Low-end CPU mode for small PCs.
+- **Fits any window:** from a 320×360 snapped window through portrait,
+  square, short-wide, ultrawide and 4K shapes. Controls and panels resize
+  smoothly in place during normal window dragging, with layout changes
+  reserved for truly tiny widths. A calm motion system fully respects
+  Windows reduced-motion settings and a Low-end CPU mode for small PCs.
 
 ## Download and install
 

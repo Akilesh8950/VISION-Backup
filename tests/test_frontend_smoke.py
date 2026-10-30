@@ -32,6 +32,10 @@ def _find_chrome() -> str | None:
     candidates = [
         os.environ.get("CHROME_BIN", ""),
         str(Path.home() / ".local/share/choreographer/deps/chrome-linux64/chrome"),
+        *(
+            str(path)
+            for path in sorted(Path("/tmp/browsers/chrome").glob("linux-*/chrome-linux64/chrome"))
+        ),
         shutil.which("google-chrome") or "",
         shutil.which("chromium") or "",
         shutil.which("chromium-browser") or "",
@@ -259,14 +263,27 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
             # composer + Send stay inside the viewport. This replaces the
             # old 520px-only check that missed a hidden ~386px floor.
             responsive_sizes = [
-                (2560, 1080, 300),
-                (1920, 1080, 280),
-                (901, 600, 260),
-                (520, 460, 64),
-                (360, 640, 50),
-                (320, 360, 50),
+                (5120, 1440, 300, False),
+                (2560, 1080, 300, False),
+                (2300, 800, 299.9, False),
+                (2200, 800, 295.3, False),
+                (2000, 800, 286, False),
+                (1920, 1080, 282.3, False),
+                (1800, 800, 276.7, False),
+                (901, 800, 238.4, False),
+                (900, 800, 238.3, False),
+                (800, 800, 227.6, False),
+                (681, 800, 214.9, False),
+                (680, 800, 64, True),
+                (1080, 1920, 257.5, False),
+                (480, 480, 64, True),
+                (1600, 360, 267.4, False),
+                (520, 460, 64, True),
+                (360, 640, 54, True),
+                (320, 360, 50, True),
             ]
-            for width, height, expected_sidebar in responsive_sizes:
+            sidebar_widths: dict[tuple[int, int], float] = {}
+            for width, height, expected_sidebar, expected_collapsed in responsive_sizes:
                 send(
                     "Emulation.setDeviceMetricsOverride",
                     {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False},
@@ -281,6 +298,7 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                         " const r = e.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom} };"
                         " return {ready:(document.body.innerText || '').includes('VISION'),"
                         " overflow:document.documentElement.scrollWidth > window.innerWidth + 1,"
+                        " collapsed:document.querySelector('.workspace')?.classList.contains('collapsed'),"
                         " inner:[innerWidth,innerHeight], app:rect('.app'), sidebar:rect('.sidebar'),"
                         " main:rect('.main'), composer:rect('.composer'), send:rect('.send-btn')} })())"
                     )
@@ -298,7 +316,9 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                             assert parsed["overflow"] is False, f"horizontal overflow at {width}x{height}: {parsed}"
                             assert abs(parsed["app"]["w"] - width) <= 1, parsed
                             assert abs(parsed["app"]["h"] - height) <= 1, parsed
-                            assert abs(parsed["sidebar"]["w"] - expected_sidebar) <= 1, parsed
+                            assert abs(parsed["sidebar"]["w"] - expected_sidebar) <= 1.5, parsed
+                            assert parsed["collapsed"] is expected_collapsed, parsed
+                            sidebar_widths[(width, height)] = parsed["sidebar"]["w"]
                             for name in ("main", "composer", "send"):
                                 rect = parsed[name]
                                 assert rect["x"] >= -1 and rect["right"] <= width + 1, (name, parsed)
@@ -307,6 +327,80 @@ def test_built_frontend_mounts_without_exceptions(tmp_path):
                             break
                     time.sleep(0.4)
                 assert size_ok, f"app did not settle at {width}x{height}"
+
+            # Fluid continuity around the old breakpoint ladder: a 1px width
+            # change at 901/900 moves the sidebar edge by about a tenth of a
+            # pixel, and 100-200px changes across 1700/2300 are proportional.
+            assert abs(sidebar_widths[(901, 800)] - sidebar_widths[(900, 800)]) <= 1
+            assert abs(sidebar_widths[(2300, 800)] - sidebar_widths[(2200, 800)]) <= 6
+            assert abs(sidebar_widths[(2000, 800)] - sidebar_widths[(1800, 800)]) <= 11
+
+            # Settings mirrors the shell's one structural threshold: its
+            # professional section rail stays on the left at 681px and only
+            # becomes the horizontal top tab bar at 680px.
+            for width, height, expect_left in ((681, 800, True), (680, 800, False)):
+                send(
+                    "Emulation.setDeviceMetricsOverride",
+                    {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False},
+                )
+                send("Page.navigate", {"url": f"http://127.0.0.1:{port}/index.html?gallery=1"})
+                deadline = time.time() + 30
+                settings_ready = False
+                while time.time() < deadline:
+                    if evaluate("Boolean(document.querySelector('.settings-footer-btn'))"):
+                        settings_ready = True
+                        break
+                    time.sleep(0.3)
+                assert settings_ready, f"Settings button not reachable at {width}x{height}"
+                evaluate("document.querySelector('.settings-footer-btn')?.click()")
+                deadline = time.time() + 20
+                settings_position_ok = False
+                while time.time() < deadline:
+                    state = evaluate(
+                        "JSON.stringify((() => {"
+                        " const rect = (s) => { const e = document.querySelector(s); if (!e) return null;"
+                        " const r = e.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom} };"
+                        " return {nav:rect('.settings-nav'), content:rect('.settings-content'),"
+                        " overflow:document.documentElement.scrollWidth > innerWidth + 1} })())"
+                    )
+                    parsed = json.loads(state) if state else {}
+                    nav = parsed.get("nav")
+                    content = parsed.get("content")
+                    if nav and content:
+                        assert parsed["overflow"] is False, parsed
+                        if expect_left:
+                            assert nav["right"] <= content["x"] + 1, parsed
+                        else:
+                            assert nav["bottom"] <= content["y"] + 1, parsed
+                            assert abs(nav["w"] - content["w"]) <= 2, parsed
+                        settings_position_ok = True
+                        break
+                    time.sleep(0.3)
+                assert settings_position_ok, f"Settings position not reachable at {width}x{height}"
+                evaluate("document.querySelector('.settings-head .icon-btn')?.click()")
+                time.sleep(0.3)
+
+            # Live frame dragging suppresses geometry transitions only until
+            # the resize stream settles.
+            evaluate("window.dispatchEvent(new Event('resize'))")
+            time.sleep(0.05)
+            assert evaluate("document.querySelector('.app')?.classList.contains('window-resizing')")
+            time.sleep(0.3)
+            assert not evaluate("document.querySelector('.app')?.classList.contains('window-resizing')")
+
+            send(
+                "Emulation.setDeviceMetricsOverride",
+                {"width": 320, "height": 360, "deviceScaleFactor": 1, "mobile": False},
+            )
+            send("Page.navigate", {"url": f"http://127.0.0.1:{port}/index.html?gallery=1"})
+            deadline = time.time() + 30
+            tiny_ready = False
+            while time.time() < deadline:
+                if evaluate("Boolean(document.querySelector('.settings-footer-btn'))"):
+                    tiny_ready = True
+                    break
+                time.sleep(0.3)
+            assert tiny_ready, "app did not reset to the 320x360 Settings check"
 
             evaluate("document.querySelector('.settings-footer-btn')?.click()")
             deadline = time.time() + 20
