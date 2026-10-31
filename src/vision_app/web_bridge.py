@@ -64,6 +64,7 @@ from .sync_service import SyncService
 from .telemetry.uploader import upload_needs_log
 from .tools.registry import ToolDefinition, ToolExecutionResult
 from .tools.router import select_tool_schemas
+from .tools.sandbox import EXECUTABLE_SUFFIXES
 from .updater.downloads import download_model
 from .updater.model_updater import check_for_update
 from .updates.service import UpdateError, UpdateService
@@ -3395,15 +3396,11 @@ class VisionWebApi:
         return {"ok": bool(opened), "message": "" if opened else "The system browser could not be opened"}
 
     def open_source_path(self, path: str) -> dict[str, Any]:
-        executable_extensions = {
-            ".bat", ".cmd", ".com", ".cpl", ".exe", ".hta", ".inf", ".ins", ".jar", ".jse", ".lnk",
-            ".msc", ".msi", ".msp", ".pif", ".ps1", ".py", ".reg", ".scr", ".vb", ".vbe", ".vbs", ".ws", ".wsf", ".wsh",
-        }
         try:
             target = Path(str(path or "")).expanduser().resolve(strict=True)
         except Exception:
             return {"ok": False, "message": "Source file no longer exists"}
-        if not target.is_file() or target.suffix.lower() in executable_extensions:
+        if not target.is_file() or target.suffix.lower() in EXECUTABLE_SUFFIXES:
             return {"ok": False, "message": "Executable or script sources cannot be opened from citations"}
         if sys.platform == "win32":
             os.startfile(str(target))  # type: ignore[attr-defined]

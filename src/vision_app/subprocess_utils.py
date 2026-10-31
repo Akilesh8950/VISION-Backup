@@ -82,6 +82,38 @@ def _drain(stream: IO[str] | None, output: _BoundedBuffer) -> None:
         return
 
 
+def _kill_process_tree(process: subprocess.Popen[str]) -> None:
+    """Kill an owned timed-out child and any descendants it spawned."""
+
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        psutil = None  # type: ignore[assignment]
+
+    if psutil is not None:
+        try:
+            root = psutil.Process(process.pid)
+            descendants = root.children(recursive=True)
+            for child in reversed(descendants):
+                try:
+                    child.kill()
+                except (psutil.Error, OSError):
+                    pass
+            root.kill()
+            try:
+                psutil.wait_procs([*descendants, root], timeout=2)
+            except (psutil.Error, OSError):
+                pass
+            return
+        except (psutil.Error, OSError, ValueError):
+            pass
+
+    try:
+        process.kill()
+    except OSError:
+        pass
+
+
 def run_bounded(
     command: list[str],
     *,
@@ -130,10 +162,7 @@ def run_bounded(
         returncode = process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        try:
-            process.kill()
-        except OSError:
-            pass
+        _kill_process_tree(process)
         try:
             returncode = process.wait(timeout=5)
         except subprocess.TimeoutExpired:

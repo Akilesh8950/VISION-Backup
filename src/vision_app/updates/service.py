@@ -72,6 +72,7 @@ MIN_MODEL_BYTES = 5_000_000_000
 MAX_MANIFEST_BYTES = 1_000_000
 MAX_REMOTE_CONFIG_BYTES = 2_000_000
 MAX_MODEL_INFO_BYTES = 2_000_000
+MAX_APP_UPDATE_BYTES = 4 * 1024**3
 APP_EXE_NAME = "VISION.exe"
 
 ChannelName = Literal["app", "model", "config"]
@@ -281,7 +282,11 @@ class AppManifest(BaseModel):
     channel: str = UPDATE_CHANNEL
     platform: str = EXPECTED_PLATFORM
     url: str = ""
-    size_bytes: int = Field(default=0, validation_alias=AliasChoices("size_bytes", "size"))
+    size_bytes: int = Field(
+        validation_alias=AliasChoices("size_bytes", "size"),
+        gt=0,
+        le=MAX_APP_UPDATE_BYTES,
+    )
     sha256: str
     min_launcher: str = "0.0.0"
     notes: str = ""
@@ -330,8 +335,10 @@ class AppManifest(BaseModel):
             parsed = int(cast(Any, value))
         except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError("Update size must be an integer") from exc
-        if parsed < 0:
-            raise ValueError("Update size cannot be negative")
+        if parsed <= 0:
+            raise ValueError("Update size must be positive")
+        if parsed > MAX_APP_UPDATE_BYTES:
+            raise ValueError("Update size exceeds the 4 GiB safety limit")
         return parsed
 
     @field_validator("notes", mode="before")
@@ -1772,6 +1779,7 @@ __all__ = [
     "LAUNCHER_VERSION",
     "MANIFEST_URL",
     "MANIFEST_URL_DEV",
+    "MAX_APP_UPDATE_BYTES",
     "MIN_MODEL_BYTES",
     "MODEL_API_URL",
     "MODEL_FILE",

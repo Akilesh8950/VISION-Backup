@@ -199,6 +199,33 @@ def test_bridge_open_url_validation_and_export_validation(tmp_path, monkeypatch)
     executable = tmp_path / "payload.exe"
     executable.write_bytes(b"MZ")
     assert api.open_source_path(str(executable))["ok"] is False
+    macro_doc = tmp_path / "macro.docm"
+    macro_doc.write_bytes(b"not a real macro document")
+    assert api.open_source_path(str(macro_doc))["ok"] is False
+
+
+def test_tool_open_url_rejects_local_and_protocol_handlers(monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        windows_tools.webbrowser,
+        "open",
+        lambda url: opened.append(url) or True,
+    )
+    for url in (
+        "file:///C:/Windows/win.ini",
+        "ms-msdt:/id PCWDiagnostic",
+        "javascript:alert(1)",
+        "https://user:pass@example.com/path",
+    ):
+        with pytest.raises(PermissionError):
+            windows_tools.open_url(
+                schemas.OpenUrlArgs.model_construct(url=url), None
+            )
+    result = windows_tools.open_url(
+        schemas.OpenUrlArgs(url="https://example.com/path"), None
+    )
+    assert result["opened"] is True
+    assert opened == ["https://example.com/path"]
 
 
 def test_qt_workers_always_emit_a_terminal_signal():
@@ -514,6 +541,42 @@ def test_bounded_subprocess_keeps_only_requested_head_or_tail_and_times_out():
             stdout_chars=100,
         )
     assert "started" in str(timeout.value.output or "")
+
+
+def test_bounded_subprocess_timeout_kills_spawned_descendant():
+    psutil = pytest.importorskip("psutil")
+    import time
+
+    code = (
+        "import subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+        "print(child.pid, flush=True); time.sleep(30)"
+    )
+    with pytest.raises(subprocess.TimeoutExpired) as timeout:
+        run_bounded([sys.executable, "-c", code], timeout=0.5, stdout_chars=100)
+
+    child_pid = int(str(timeout.value.output or "").strip())
+    deadline = time.time() + 3
+    while psutil.pid_exists(child_pid) and time.time() < deadline:
+        time.sleep(0.05)
+    assert not psutil.pid_exists(child_pid)
+
+
+def test_audit_log_caps_huge_lines_and_rotates(tmp_path):
+    from vision_app.logging_setup import AuditLog
+
+    path = tmp_path / "audit.jsonl"
+    log = AuditLog(path, max_bytes=1500, backup_count=2, max_line_bytes=1200)
+    for index in range(25):
+        log.write("tool", {"index": index, "blob": "x" * 2000}, "ok", 1.0, source="builtin")
+
+    assert path.exists()
+    assert (tmp_path / "audit.jsonl.1").exists()
+    assert (tmp_path / "audit.jsonl.2").exists()
+    assert not (tmp_path / "audit.jsonl.3").exists()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines and all(len(line.encode("utf-8")) <= 1200 for line in lines)
+    assert json.loads(lines[-1])["args"] == {"truncated": True}
 
 
 def test_gpu_status_parses_commas_and_skips_only_malformed_rows(monkeypatch):

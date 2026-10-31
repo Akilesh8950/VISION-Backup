@@ -86,8 +86,19 @@ def atomic_write_json(path: Path, payload: dict) -> None:
             os.unlink(tmp_name)
 
 
+def _valid_version(value: object) -> str:
+    text = str(value or "").strip()
+    return text if parse_version(text) is not None else ""
+
+
 def version_exe(root: Path, version: str) -> Path:
-    return root / "versions" / version / APP_EXE_NAME
+    clean = _valid_version(version)
+    if not clean:
+        # A malformed launcher state file must never be able to turn a
+        # version string such as "../../outside" into an executable path
+        # outside the versioned install tree.
+        return root / "versions" / "__invalid__" / APP_EXE_NAME
+    return root / "versions" / clean / APP_EXE_NAME
 
 
 def installed_versions(root: Path) -> list[str]:
@@ -104,8 +115,8 @@ def installed_versions(root: Path) -> list[str]:
 
 def initial_selection(root: Path) -> tuple[str, str]:
     current_data = read_json(root / "current.json")
-    current = str(current_data.get("version") or "")
-    previous = str(current_data.get("previous") or "")
+    current = _valid_version(current_data.get("version"))
+    previous = _valid_version(current_data.get("previous"))
     installed = installed_versions(root)
 
     if not (current and version_exe(root, current).is_file()):
@@ -134,14 +145,14 @@ def consume_pending(root: Path, current: str, previous: str) -> tuple[str, str] 
     if not pending_path.is_file():
         return None
     pending = read_json(pending_path)
-    next_version = str(pending.get("version") or "")
+    next_version = _valid_version(pending.get("version"))
     # Whether valid or not, the file is a one-time handoff.  Removing an
     # invalid one prevents a launch loop; the currently selected version is
     # left untouched in that case.
     pending_path.unlink(missing_ok=True)
-    if parse_version(next_version) is None or not version_exe(root, next_version).is_file():
+    if not next_version or not version_exe(root, next_version).is_file():
         return None
-    next_previous = str(pending.get("previous") or current)
+    next_previous = _valid_version(pending.get("previous")) or current
     if next_previous == next_version or not version_exe(root, next_previous).is_file():
         next_previous = current if current != next_version else previous
     write_current(root, next_version, next_previous)

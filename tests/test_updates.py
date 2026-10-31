@@ -413,6 +413,19 @@ def _launcher_install(tmp_path: Path, versions: list[str], current: str, previou
     return root
 
 
+def test_launcher_rejects_traversal_version_in_current_selection(tmp_path):
+    launcher = _load_launcher()
+    root = _launcher_install(tmp_path, ["1.0.0"], "../../outside", "1.0.0")
+    outside = tmp_path / "outside" / "VISION.exe"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"outside")
+
+    assert launcher.initial_selection(root) == ("1.0.0", "")
+    invalid_path = launcher.version_exe(root, "../../outside").resolve()
+    assert invalid_path != outside.resolve()
+    assert (root / "versions").resolve() in invalid_path.parents
+
+
 def test_launcher_consumes_pending_only_after_child_exit(tmp_path):
     launcher = _load_launcher()
     root = _launcher_install(tmp_path, ["1.0.0", "1.1.0"], "1.0.0")
@@ -530,6 +543,33 @@ def test_manifest_accepts_legacy_size_field():
     assert manifest.expected_size == 1234
     assert manifest.channel == "stable"
     assert manifest.platform == "windows-x64"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"version": "1.2.3", "url": "https://example.com/VISION.zip", "sha256": "a" * 64},
+        {
+            "version": "1.2.3",
+            "url": "https://example.com/VISION.zip",
+            "sha256": "a" * 64,
+            "size_bytes": 0,
+        },
+        {
+            "version": "1.2.3",
+            "url": "https://example.com/VISION.zip",
+            "sha256": "a" * 64,
+            "size_bytes": 4 * 1024**3 + 1,
+        },
+    ],
+)
+def test_manifest_requires_bounded_positive_size(payload):
+    from pydantic import ValidationError
+
+    from vision_app.updates.service import AppManifest
+
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate(payload)
 
 
 def test_size_mismatch_aborts_without_staging(tmp_path, update_server):

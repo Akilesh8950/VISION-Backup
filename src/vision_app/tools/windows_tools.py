@@ -9,6 +9,7 @@ import sys
 import threading
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
 
 import psutil
 
@@ -181,8 +182,27 @@ def open_path(args: schemas.OpenPathArgs, context: ToolContext) -> dict:
 
 
 def open_url(args: schemas.OpenUrlArgs, _context: ToolContext) -> dict:
-    opened = webbrowser.open(args.url)
-    return {"url": args.url, "opened": bool(opened)}
+    clean = str(args.url or "").strip()
+    try:
+        parsed = urlparse(clean)
+        _port = parsed.port
+    except ValueError as exc:
+        raise PermissionError(
+            f"{SAFETY_BLOCK_MESSAGE}: open_url accepts only valid HTTP/HTTPS URLs"
+        ) from exc
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or not clean.lower().startswith((parsed.scheme.lower() + "://",))
+        or len(clean) > 4096
+    ):
+        raise PermissionError(
+            f"{SAFETY_BLOCK_MESSAGE}: open_url accepts only HTTP/HTTPS URLs without embedded credentials"
+        )
+    opened = webbrowser.open(clean)
+    return {"url": clean, "opened": bool(opened)}
 
 
 def clipboard_get(_args, _context: ToolContext) -> dict:

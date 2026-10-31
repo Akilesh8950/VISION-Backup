@@ -5,7 +5,14 @@ import re
 from pathlib import Path
 
 SYSTEM_PREFIXES_POSIX = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys", "/dev")
-EXECUTABLE_SUFFIXES = {".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".ps1", ".vbs", ".js"}
+EXECUTABLE_SUFFIXES = {
+    ".bat", ".cmd", ".com", ".cpl", ".docm", ".dotm", ".exe", ".hta",
+    ".inf", ".ins", ".jar", ".js", ".jse", ".lnk", ".msc", ".msi",
+    ".msp", ".mst", ".pif", ".ppam", ".ppsm", ".pptm", ".ps1", ".py",
+    ".pyw", ".reg", ".scr", ".sct", ".shb", ".shs", ".u3p", ".vb",
+    ".vbe", ".vbs", ".vsdm", ".ws", ".wsf", ".wsh", ".xlam", ".xlsm",
+    ".xltm",
+}
 _WINDOWS_SYSTEM_FOLDERS = ("windows", "program files", "program files (x86)", "programdata")
 _WINDOWS_ROOT_ENV_VARS = ("SystemRoot", "WINDIR", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData")
 
