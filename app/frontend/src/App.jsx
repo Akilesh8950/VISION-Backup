@@ -360,7 +360,7 @@ const Composer = memo(function Composer({ value, setValue, onSubmit, streaming, 
           {onToggleAgent ? (
             <span className={`mode-toggle${agentMode ? ' is-agent' : ''}`} role="group" aria-label="Response mode">
               <button type="button" className={!agentMode ? 'active' : ''} onClick={() => onToggleAgent(false)}>Chat</button>
-              <button type="button" className={agentMode ? 'active agent' : ''} title="Agent mode: VISION plans and works through the goal step by step with tools. Safe actions run without asking each time; risky actions still ask. Stop anytime." onClick={() => onToggleAgent(true)}>Agent</button>
+              <button type="button" className={agentMode ? 'active agent' : ''} title="Agent mode: VISION plans and works through the goal step by step with tools. App/file launches always ask. Python also asks unless you separately enable it for this session in Settings → Tools. Stop anytime." onClick={() => onToggleAgent(true)}>Agent</button>
             </span>
           ) : null}
           <span className="grow" />
@@ -496,6 +496,7 @@ export default function App() {
   const [projects, setProjects] = useState([])
   const [skills, setSkills] = useState([])
   const [extensions, setExtensions] = useState({ servers: [], connectors: [], dynamic_tool_count: 0, messages: [] })
+  const [toolSafety, setToolSafety] = useState({ python_auto_approve: false })
   const [conversations, setConversations] = useState([])
   const [currentId, setCurrentId] = useState('')
   const [currentConversation, setCurrentConversation] = useState(null)
@@ -758,6 +759,27 @@ export default function App() {
     enqueueConfirm({ kind: 'local', title, message, details, resolve, approveLabel: options.approveLabel || 'Allow', denyLabel: options.denyLabel || 'Deny' })
   }), [enqueueConfirm])
 
+  const togglePythonAutoApprove = useCallback(async (next) => {
+    const enabled = Boolean(next)
+    if (enabled) {
+      const confirmed = await localConfirm(
+        'Allow Python without asking?',
+        'Model-generated Python can read and change files available to your Windows account. Only enable this for a task and code source you trust. This permission lasts only until VISION closes.',
+        { scope: 'This VISION session only', default: 'Off at every launch', agent_mode: 'Does not change this setting' },
+        { approveLabel: 'Allow for this session', denyLabel: 'Cancel' },
+      )
+      if (!confirmed) return
+    }
+    if (!nativeRef.current) {
+      setToolSafety({ python_auto_approve: enabled })
+      pushToast(enabled ? 'Preview only: automatic Python shown as on for this session.' : 'Python will ask before running.')
+      return
+    }
+    const result = await callApi('set_python_auto_approve', enabled)
+    if (result?.tool_safety) setToolSafety(result.tool_safety)
+    pushToast(enabled ? 'Python may run without asking until VISION closes.' : 'Python will ask before running.')
+  }, [callApi, localConfirm, pushToast])
+
   const resolveConfirm = useCallback(async (approved) => {
     const item = confirmQueue[0]
     if (!item) return
@@ -811,6 +833,7 @@ export default function App() {
     if (data.available_models) setAvailableModels(data.available_models)
     if (data.hardware) setHardware(data.hardware)
     if (data.live) setLiveCapabilities(normalizeLiveCapabilities(data.live, nativeRef.current))
+    if (data.tool_safety) setToolSafety({ python_auto_approve: Boolean(data.tool_safety.python_auto_approve) })
   }, [])
 
   const openSettings = useCallback(async (tab = 'general') => {
@@ -1621,6 +1644,7 @@ export default function App() {
     if (!nativeRef.current) { setOverlay(''); pushToast('Settings saved locally in preview mode.', 'success'); return }
     const result = await callApi('save_settings', payload)
     if (!result) return
+    if (result.ok === false) { pushToast(result.message || 'Settings could not be saved.', 'error'); return }
     applySettingsData(result)
     setSelectedProject(payload.active_project_id || '')
     setOverlay(''); pushToast('Settings saved.', 'success')
@@ -1971,7 +1995,7 @@ export default function App() {
                   </div>
                   <TechnicalDetails label="Advanced connection settings">
                     <div className="form-grid technical-grid">
-                      <div className="field full"><label>Backup connection address</label><input className="input" type="password" autoComplete="new-password" placeholder={form.remote_base_url_configured ? 'Saved address hidden — enter a new one to replace it' : 'Paste the service address'} value={form.remote_base_url} onChange={(e) => setForm({ ...form, remote_base_url: e.target.value, clear_remote_base_url: false })} /><small>For privacy, a saved address is never shown again. Leave this blank to keep it.</small></div>
+                      <div className="field full"><label>Backup connection address</label><input className="input" type="password" autoComplete="new-password" placeholder={form.remote_base_url_configured ? 'Saved address hidden — enter a new one to replace it' : 'Paste the service address'} value={form.remote_base_url} onChange={(e) => setForm({ ...form, remote_base_url: e.target.value, clear_remote_base_url: false })} /><small>Use HTTPS (HTTP is allowed only for localhost). For privacy, a saved address is never shown again. Leave this blank to keep it.</small></div>
                       {form.remote_base_url_configured ? <label className="check-row"><input type="checkbox" checked={form.clear_remote_base_url} onChange={(e) => setForm({ ...form, clear_remote_base_url: e.target.checked, remote_base_url: '' })} />Remove the saved connection address</label> : null}
                       <div className="field full"><label>Backup model name (optional)</label><input className="input" autoComplete="off" placeholder="Use the service default" value={form.remote_model_override} onChange={(e) => setForm({ ...form, remote_model_override: e.target.value })} /></div>
                     </div>
@@ -1997,6 +2021,10 @@ export default function App() {
                     <label className="check-row"><input type="checkbox" checked={extensions.extensions_enabled !== false} onChange={async (e) => { const r = await callApi('set_extensions_enabled', e.target.checked); if (r?.extensions) setExtensions(r.extensions); pushToast(e.target.checked ? 'Extensions on.' : 'Extensions off — built-in tools only.') }} />Extensions enabled</label>
                     <span className="budget-line" title="Tools sent to the model on the last turn, and their estimated size">{extensions.routing?.tool_count != null ? `${extensions.routing.tool_count}/${extensions.routing.max_tools || 40} tools · ~${((extensions.routing.estimated_tokens || 0) / 1000).toFixed(1)}k tokens` : 'Tool budget appears after your next message'}</span>
                   </div>
+                  <h4>Built-in tool safety</h4>
+                  <p className="section-copy">Model-requested app, file, and web-page launches always ask first. Python also asks first unless you separately allow it below; Agent mode never changes this permission by itself.</p>
+                  <label className="check-row"><input type="checkbox" checked={Boolean(toolSafety.python_auto_approve)} onChange={(e) => togglePythonAutoApprove(e.target.checked)} />Allow Python without asking (this session only)</label>
+                  <small>{toolSafety.python_auto_approve ? 'Automatic Python is ON until VISION closes. Turn it off as soon as the trusted task is finished.' : 'Off by default and reset at every launch. Turning it on asks for one explicit confirmation.'}</small>
                   {extensions.routing?.included_extension_tools?.length || extensions.routing?.dropped?.length ? (
                     <TechnicalDetails label="Tool budget (debug)" rows={[['Included extension tools', (extensions.routing.included_extension_tools || []).join(', ') || 'None'], ['Dropped', (extensions.routing.dropped || []).map((d) => `${d.name} (${d.reason})`).join(', ') || 'None']]}>
                       <p className="empty-note" style={{ margin: 0 }}>Built-in tools are always sent. Extension tools are ranked against your message and added until the budget (40 tools, ~4k tokens of definitions) fills.</p>

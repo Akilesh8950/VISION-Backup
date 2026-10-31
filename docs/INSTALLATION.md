@@ -57,7 +57,7 @@ D:\VISION\
 
 End users only need the finished `VISION-Setup-...exe`; skip to Part 2 if you already have it.
 
-> Optional folder helper: run `setup_helper\VISION-Create-Folders.exe`, choose a parent such as `D:\`, and it creates `D:\VISION-Source` and `D:\VISION`. Put source/build files only in `VISION-Source`; later choose `VISION` as Setup's installation folder. The helper only creates those folders—it does not download or install VISION.
+> Folder layout: create separate `VISION-Source` and `VISION` folders yourself (for example under `D:\`). Put source/build files only in `VISION-Source`; later choose `VISION` as Setup's installation folder. Public packages intentionally do not include a prebuilt folder-helper executable; `setup_helper` is source-only, and Setup does not depend on it.
 
 ### 1. Install build prerequisites
 
@@ -95,6 +95,8 @@ The committed React production bundle is already in `app\web`, so the normal rel
 ```powershell
 .\scripts\build_installer.ps1
 ```
+
+Release dependency installation is hash-locked for 64-bit CPython 3.11 on Windows. The build requires Python 3.11 and installs `requirements-win311.lock.txt` with pip hash verification, without an unpinned pip self-upgrade.
 
 This will:
 
@@ -136,6 +138,8 @@ Useful rebuild options:
 ```
 
 > The build produced by this repository is not automatically code-signed. Windows SmartScreen may warn on first run. For public distribution, sign the executable and installer with a trusted code-signing certificate and publish the `.sha256` checksum beside the download.
+
+> Public update publication has a separate Ed25519 signing requirement. Follow `docs/RELEASE_SIGNING.md`: embed only the public key in VISION, keep the private key offline, and do not publish update JSON until the distributed build trusts that key.
 
 ## Part 2 — Install VISION (end user tutorial)
 

@@ -79,7 +79,9 @@ class PathSandbox:
             return True
         if action == "write" and not self.is_inside_workspace(resolved):
             return True
-        if action == "open" and resolved.suffix.lower() in EXECUTABLE_SUFFIXES:
+        if action == "open":
+            # Every model-requested shell open asks.  An extension list
+            # cannot prove that a Windows file association is inert.
             return True
         return action == "read" and not self.is_read_allowed_root(resolved)
 

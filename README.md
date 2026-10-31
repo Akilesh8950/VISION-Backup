@@ -74,8 +74,7 @@ git clone <repository-url> VISION
 cd VISION
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements-win311.lock.txt
 python -m pip install -e . --no-deps
 python -m vision_app
 ```
@@ -135,9 +134,12 @@ histories, auto-names a chat from its first exchange, and exposes rename,
 pin, move-to-project and delete actions from each row. Uploaded files persist
 in the Item Library with thumbnails/type icons, sizes and used-in-chats
 counts; supported text files up to 256 KB can be re-attached to a message.
-Settings → Updates independently tracks App, Model, and Config: app packages
-are hash-verified and staged for an explicit restart, models activate on the
-next launch, and validated configuration can apply live.
+Settings → Updates independently tracks App, Model, and Config: signed app
+manifests and remote configs are verified before use, app packages are
+hash-verified and staged for an explicit restart, models activate on the
+next launch, and validated configuration can apply live. Release operators
+must follow [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md); the private
+signing key stays offline and only its public key is embedded in VISION.
 
 After the model/server have been downloaded, disconnecting the network must
 not blank or degrade the interface.

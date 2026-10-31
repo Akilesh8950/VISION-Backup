@@ -22,6 +22,7 @@ dependencies = [
   "mcp",
   "PyYAML",
   "jsonschema",
+  "cryptography>=50",
   "pypdf",
   "python-docx",
   "Pillow>=10.4",

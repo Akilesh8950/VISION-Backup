@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,7 +23,7 @@ from vision_app.python_helper import run_python_script
 from vision_app.server import download_llama as download_llama_module
 from vision_app.server.download_llama import download_file, safe_extract_zip
 from vision_app.subprocess_utils import BoundedProcessResult, run_bounded
-from vision_app.tools import schemas, web_reader, windows_tools
+from vision_app.tools import code_files, schemas, web_reader, windows_tools
 from vision_app.updater.downloads import activate_pending_model
 from vision_app.web_bridge import VisionWebApi
 
@@ -104,6 +105,38 @@ def test_bridge_never_echoes_saved_remote_address_and_blank_keeps_it(tmp_path):
 
     api.save_settings({"remote_base_url": "", "clear_remote_base_url": True})
     assert api.config.remote_base_url == ""
+
+
+def test_remote_model_and_mcp_urls_require_https_outside_loopback(tmp_path):
+    assert AppConfig(remote_base_url="https://remote.example/v1").remote_base_url
+    assert AppConfig(remote_base_url="http://127.0.0.1:9000/v1").remote_base_url
+    assert AppConfig(remote_base_url="http://remote.example/v1").remote_base_url == ""
+    assert AppConfig(remote_base_url="https://user:pass@example.com/v1").remote_base_url == ""
+    assert AppConfig(remote_base_url="file:///C:/Windows/win.ini").remote_base_url == ""
+
+    api = make_api(tmp_path)
+    api.config.remote_base_url = "https://private.example/v1"
+    rejected = api.save_settings({"remote_base_url": "http://remote.example/v1"})
+    assert rejected["ok"] is False
+    assert "HTTPS" in rejected["message"]
+    assert api.config.remote_base_url == "https://private.example/v1"
+
+    with pytest.raises(Exception, match="HTTPS outside loopback"):
+        McpServerConfig(
+            id="remote-http",
+            display_name="Remote HTTP",
+            transport="streamable_http",
+            enabled=True,
+            url="http://tools.example/mcp",
+        )
+    local = McpServerConfig(
+        id="local-http",
+        display_name="Local HTTP",
+        transport="streamable_http",
+        enabled=True,
+        url="http://127.0.0.1:8765/mcp",
+    )
+    assert local.url.startswith("http://127.0.0.1")
 
 
 def test_bridge_extension_and_project_summaries_do_not_leak_private_details(tmp_path):
@@ -206,6 +239,16 @@ def test_bridge_open_url_validation_and_export_validation(tmp_path, monkeypatch)
 
 def test_tool_open_url_rejects_local_and_protocol_handlers(monkeypatch):
     opened = []
+    confirmations = []
+
+    class Context:
+        approved = True
+
+        def require_confirmation(self, title, message, details):
+            confirmations.append((title, message, details))
+            return self.approved
+
+    context = Context()
     monkeypatch.setattr(
         windows_tools.webbrowser,
         "open",
@@ -219,13 +262,126 @@ def test_tool_open_url_rejects_local_and_protocol_handlers(monkeypatch):
     ):
         with pytest.raises(PermissionError):
             windows_tools.open_url(
-                schemas.OpenUrlArgs.model_construct(url=url), None
+                schemas.OpenUrlArgs.model_construct(url=url), context
             )
+    context.approved = False
+    with pytest.raises(PermissionError, match="declined"):
+        windows_tools.open_url(
+            schemas.OpenUrlArgs(url="https://example.com/path"), context
+        )
+    assert opened == []
+
+    context.approved = True
     result = windows_tools.open_url(
-        schemas.OpenUrlArgs(url="https://example.com/path"), None
+        schemas.OpenUrlArgs(url="https://example.com/path"), context
     )
     assert result["opened"] is True
     assert opened == ["https://example.com/path"]
+    assert len(confirmations) == 2
+
+
+def test_plain_open_app_always_requires_confirmation(monkeypatch):
+    launched = []
+
+    class Context:
+        approved = False
+
+        def require_confirmation(self, _title, _message, _details):
+            return self.approved
+
+    context = Context()
+    monkeypatch.setattr(windows_tools.shutil, "which", lambda _name: "/fake/Calculator.exe")
+    monkeypatch.setattr(
+        windows_tools, "_launch_program", lambda target: launched.append(target) or target
+    )
+
+    with pytest.raises(PermissionError, match="declined"):
+        windows_tools.open_app(schemas.OpenAppArgs(app_name="calculator"), context)
+    assert launched == []
+
+    context.approved = True
+    result = windows_tools.open_app(schemas.OpenAppArgs(app_name="calculator"), context)
+    assert result["opened"] is True
+    assert launched == ["/fake/Calculator.exe"]
+
+
+def test_bridge_python_auto_approve_is_a_separate_session_opt_in(tmp_path):
+    api = make_api(tmp_path)
+    assert api.get_state()["tool_safety"] == {"python_auto_approve": False}
+    assert api.tool_context.auto_approve_python is False
+
+    result = api.set_python_auto_approve(True)
+
+    assert result["tool_safety"] == {"python_auto_approve": True}
+    assert api.tool_context.auto_approve_python is True
+    # The flag is not a config field and is never persisted by save_settings.
+    assert not hasattr(api.config, "python_auto_approve")
+
+
+def test_search_code_runs_isolated_and_kills_catastrophic_regex(tmp_path, monkeypatch):
+    api = make_api(tmp_path)
+    target = api.paths.workspace / "search.txt"
+    target.write_text("alpha\nneedle here\nomega\n", encoding="utf-8")
+
+    result = code_files.search_code(
+        schemas.SearchCodeArgs(pattern="needle", path=str(target)),
+        api.tool_context,
+    )
+    assert result["matches"] == [
+        {"path": str(target.resolve()), "line": 2, "text": "needle here"}
+    ]
+
+    target.write_text(("a" * 35) + "!\n", encoding="utf-8")
+    monkeypatch.setattr(code_files, "SEARCH_TIME_LIMIT_SECONDS", 0.5)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="timed out"):
+        code_files.search_code(
+            schemas.SearchCodeArgs(pattern=r"(a+)+$", path=str(target)),
+            api.tool_context,
+        )
+    assert time.monotonic() - started < 5
+
+
+def test_oauth_callback_ignores_wrong_state_then_accepts_exact_state(tmp_path, monkeypatch):
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    from types import SimpleNamespace
+
+    import httpx
+
+    api = make_api(tmp_path)
+    entry = SimpleNamespace(
+        scopes=["read"],
+        oauth=SimpleNamespace(
+            authorize_url="https://auth.example/authorize?prompt=consent",
+            token_url="https://auth.example/token",
+            client_id="vision-client",
+        ),
+    )
+
+    def fake_browser(url):
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        redirect = params["redirect_uri"][0]
+        state = params["state"][0]
+        with pytest.raises(urllib.error.HTTPError) as wrong:
+            urllib.request.urlopen(f"{redirect}?state=wrong&code=bad", timeout=5)
+        assert wrong.value.code == 400
+        with urllib.request.urlopen(f"{redirect}?state={state}&code=good-code", timeout=5) as response:
+            assert response.status == 200
+        return True
+
+    class TokenResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"access_token": "oauth-access-token"}
+
+    monkeypatch.setattr("vision_app.web_bridge.webbrowser.open", fake_browser)
+    monkeypatch.setattr(httpx, "post", lambda *_args, **_kwargs: TokenResponse())
+
+    assert api._oauth_pkce_token(entry) == "oauth-access-token"
 
 
 def test_qt_workers_always_emit_a_terminal_signal():

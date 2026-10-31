@@ -24,6 +24,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     ValidationError,
     field_validator,
     model_validator,
@@ -36,6 +37,8 @@ from ..paths import AppPaths
 from ..server.download_llama import safe_extract_zip
 from ..tools import schemas as tool_schemas
 from ..updater.downloads import activate_pending_model, download_model
+from .release_keys import RELEASE_PUBLIC_KEYS
+from .signing import SignatureError, verify_signed_json
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,10 @@ MAX_REMOTE_CONFIG_BYTES = 2_000_000
 MAX_MODEL_INFO_BYTES = 2_000_000
 MAX_APP_UPDATE_BYTES = 4 * 1024**3
 APP_EXE_NAME = "VISION.exe"
+UPDATE_ROOT_NOT_WRITABLE_MESSAGE = (
+    "VISION could not write to its update folder. Use a current-user or portable "
+    "installation for in-app updates, or run the latest setup manually."
+)
 
 ChannelName = Literal["app", "model", "config"]
 ChannelStatusName = Literal[
@@ -291,6 +298,9 @@ class AppManifest(BaseModel):
     min_launcher: str = "0.0.0"
     notes: str = ""
     released_at: str = ""
+    signature: str = ""
+    signature_key_id: str = ""
+    signature_algorithm: str = ""
 
     @property
     def expected_size(self) -> int:
@@ -474,6 +484,22 @@ class ConnectorOAuthConfig(BaseModel):
         text = str(value or "").strip()
         if len(text) > 2000:
             raise ValueError("OAuth URL too long")
+        if not text:
+            return ""
+        parsed = urlparse(text)
+        try:
+            _port = parsed.port
+        except ValueError as exc:
+            raise ValueError("OAuth URL has an invalid port") from exc
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+            or not text.lower().startswith("https://")
+        ):
+            raise ValueError("OAuth URLs must be HTTPS URLs without embedded credentials")
         return text
 
 
@@ -525,11 +551,24 @@ class ConnectorDirectoryEntry(BaseModel):
     @classmethod
     def _url(cls, value: object) -> str:
         text = str(value or "").strip()
+        if len(text) > 2000:
+            raise ValueError("connector URL too long")
         if text:
             parsed = urlparse(text)
-            if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-                raise ValueError("connector URL must be http(s)")
-        return text[:2000]
+            try:
+                _port = parsed.port
+            except ValueError as exc:
+                raise ValueError("connector URL has an invalid port") from exc
+            loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or (parsed.scheme.lower() == "http" and not loopback)
+            ):
+                raise ValueError("connector URL must use HTTPS outside loopback")
+        return text
 
     @field_validator("description", mode="before")
     @classmethod
@@ -544,6 +583,14 @@ class RemoteConfig(BaseModel):
     tool_schemas: list[ToolSchemaConfig] = Field(default_factory=list)
     ui_strings: dict[str, str] = Field(default_factory=dict)
     connectors: list[ConnectorDirectoryEntry] = Field(default_factory=list, max_length=128)
+    signature: str = ""
+    signature_key_id: str = ""
+    signature_algorithm: str = ""
+    # The exact JSON object whose signature verified.  Caching must write
+    # this object rather than model_dump(): Pydantic normalization/defaults
+    # can change the canonical bytes and make a valid cached signature fail
+    # on the next launch.
+    _signed_payload: dict[str, Any] | None = PrivateAttr(default=None)
 
     @field_validator("version", mode="before")
     @classmethod
@@ -712,6 +759,7 @@ class UpdateService:
         connectivity: ConnectivityMonitor | None = None,
         network_retry_delay_seconds: float = 2.0,
         max_offline_wait_seconds: float = 2 * 3600.0,
+        release_public_keys: dict[str, str] | None = None,
     ):
         self.root = Path(root)
         self.paths = paths
@@ -734,6 +782,9 @@ class UpdateService:
         self.connectivity = connectivity or default_monitor()
         self.network_retry_delay_seconds = max(0.0, float(network_retry_delay_seconds))
         self.max_offline_wait_seconds = max(0.0, float(max_offline_wait_seconds))
+        self.release_public_keys = dict(
+            RELEASE_PUBLIC_KEYS if release_public_keys is None else release_public_keys
+        )
 
         self.downloads_dir = self.root / "downloads"
         self.versions_dir = self.root / "versions"
@@ -835,13 +886,40 @@ class UpdateService:
         except OSError:
             logger.warning("Could not persist update state", exc_info=True)
 
+    def _signing_purpose(self, kind: str) -> str:
+        return f"{kind}-{'dev' if self.dev_channel else 'stable'}"
+
+    def _verify_signed_payload(
+        self, payload: dict[str, Any], kind: str, label: str
+    ) -> dict[str, Any]:
+        try:
+            return verify_signed_json(
+                payload,
+                self.release_public_keys,
+                purpose=self._signing_purpose(kind),
+            )
+        except SignatureError as exc:
+            if not self.release_public_keys:
+                message = (
+                    f"Signed update verification is not configured in this build; "
+                    f"the {label} was rejected."
+                )
+            else:
+                message = f"The {label} signature was rejected."
+            raise UpdateValidationError(message) from exc
+
     def _load_cached_config(self) -> RemoteConfig:
         raw = _read_json_file(self.remote_config_file, max_bytes=MAX_REMOTE_CONFIG_BYTES)
         if raw:
             try:
-                return RemoteConfig.model_validate(raw)
-            except (ValidationError, ValueError):
-                logger.warning("Ignoring malformed cached remote configuration")
+                verified = self._verify_signed_payload(
+                    raw, "remote-config", "cached remote configuration"
+                )
+                config = RemoteConfig.model_validate(verified)
+                config._signed_payload = json.loads(json.dumps(verified))
+                return config
+            except (UpdateValidationError, ValidationError, ValueError):
+                logger.warning("Ignoring unsigned or malformed cached remote configuration")
         return bundled_remote_config()
 
     def apply_active_config(self) -> None:
@@ -919,7 +997,11 @@ class UpdateService:
         return parsed
 
     def fetch_manifest(self) -> AppManifest:
-        payload = self._get_json(self.manifest_url, max_bytes=MAX_MANIFEST_BYTES)
+        payload = self._verify_signed_payload(
+            self._get_json(self.manifest_url, max_bytes=MAX_MANIFEST_BYTES),
+            "app-manifest",
+            "app update manifest",
+        )
         try:
             manifest = AppManifest.model_validate(payload)
         except (ValidationError, ValueError) as exc:
@@ -966,11 +1048,17 @@ class UpdateService:
         return result
 
     def _fetch_remote_config(self) -> RemoteConfig:
-        payload = self._get_json(self.config_url, max_bytes=MAX_REMOTE_CONFIG_BYTES)
+        payload = self._verify_signed_payload(
+            self._get_json(self.config_url, max_bytes=MAX_REMOTE_CONFIG_BYTES),
+            "remote-config",
+            "remote configuration",
+        )
         try:
-            return RemoteConfig.model_validate(payload)
+            config = RemoteConfig.model_validate(payload)
         except (ValidationError, ValueError) as exc:
             raise UpdateValidationError("The remote configuration was rejected") from exc
+        config._signed_payload = json.loads(json.dumps(payload))
+        return config
 
     # ------------------------------------------------------------------
     # Local status construction
@@ -984,6 +1072,29 @@ class UpdateService:
             return self.config.installed_model_sha
         return self.state.model_sha
 
+    def _update_root_writable_hint(self) -> bool:
+        probe = _nearest_existing_parent(self.downloads_dir)
+        try:
+            return probe.is_dir() and os.access(probe, os.W_OK)
+        except OSError:
+            return False
+
+    def _ensure_update_root_writable(self) -> None:
+        try:
+            self.downloads_dir.mkdir(parents=True, exist_ok=True)
+            self.versions_dir.mkdir(parents=True, exist_ok=True)
+            for directory in (self.downloads_dir, self.versions_dir):
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix=".vision-write-test-", dir=str(directory)
+                )
+                try:
+                    os.close(fd)
+                finally:
+                    os.unlink(tmp_name)
+        except OSError as exc:
+            self._status_errors["app"] = UPDATE_ROOT_NOT_WRITABLE_MESSAGE
+            raise UpdateError(UPDATE_ROOT_NOT_WRITABLE_MESSAGE) from exc
+
     def _local_statuses(self) -> tuple[ChannelStatus, ChannelStatus, ChannelStatus]:
         pending = self._pending()
         app_status: ChannelStatusName = "up_to_date"
@@ -994,6 +1105,10 @@ class UpdateService:
         elif self._manifest is not None and SemVer.parse(self._manifest.version) > SemVer.parse(self.state.version):
             app_status = "update_available"
             app_available = self._manifest.version
+        app_error = self._status_errors.get("app", "")
+        if app_status == "update_available" and not self._update_root_writable_hint():
+            app_status = "failed"
+            app_error = UPDATE_ROOT_NOT_WRITABLE_MESSAGE
         if self._status_errors.get("app") and app_status != "restart_to_apply":
             app_status = "failed"
 
@@ -1023,7 +1138,7 @@ class UpdateService:
             last_checked=self.state.last_checked,
             progress=self._progress.get("app"),
             notes=self._manifest.notes if self._manifest is not None else "",
-            error=self._status_errors.get("app", ""),
+            error=app_error,
             previous_version=self.state.previous,
             available_size=self._manifest.expected_size if self._manifest is not None else 0,
         )
@@ -1183,10 +1298,16 @@ class UpdateService:
     def _apply_remote_config(self, remote: RemoteConfig) -> ChannelStatus:
         self.active_config = remote
         self._available_config = None
-        try:
-            _atomic_write_json(self.remote_config_file, remote.model_dump(mode="json"))
-        except OSError:
-            logger.warning("Could not cache the applied remote configuration", exc_info=True)
+        if remote._signed_payload is not None:
+            try:
+                _atomic_write_json(
+                    self.remote_config_file,
+                    json.loads(json.dumps(remote._signed_payload)),
+                )
+            except OSError:
+                logger.warning("Could not cache the applied remote configuration", exc_info=True)
+        else:
+            logger.warning("Not caching an unsigned in-memory remote configuration")
         if self.on_config_applied is not None:
             try:
                 self.on_config_applied(remote)
@@ -1508,6 +1629,7 @@ class UpdateService:
                     return self._local_statuses()[0]
 
                 self._status_errors.pop("app", None)
+                self._ensure_update_root_writable()
                 self._progress["app"] = 0.0
                 archive = self._fetch_verified_app_zip(manifest)
                 self._extract_app_zip(archive, manifest.version)
@@ -1531,10 +1653,7 @@ class UpdateService:
                 self._status_errors["app"] = str(exc)
                 raise UpdateValidationError(str(exc)) from exc
             except OSError as exc:
-                self._status_errors["app"] = (
-                    "VISION could not write to its update folder. Use a current-user or portable "
-                    "installation for in-app updates, or run the latest setup manually."
-                )
+                self._status_errors["app"] = UPDATE_ROOT_NOT_WRITABLE_MESSAGE
                 raise UpdateError(self._status_errors["app"]) from exc
             finally:
                 self._progress["app"] = None
@@ -1784,6 +1903,7 @@ __all__ = [
     "MODEL_API_URL",
     "MODEL_FILE",
     "MODEL_REPO",
+    "RELEASE_PUBLIC_KEYS",
     "UPDATES_ENABLED",
     "UPDATE_CHANNEL",
     "AppManifest",

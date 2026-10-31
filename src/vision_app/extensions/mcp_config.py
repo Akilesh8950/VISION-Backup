@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -73,6 +74,13 @@ class McpServerConfig(BaseModel):
             raise ValueError("enabled remote MCP server requires a valid HTTP/HTTPS URL")
         if parsed.username or parsed.password:
             raise ValueError("remote MCP URL must not contain embedded credentials")
+        host = parsed.hostname.lower().rstrip(".")
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if parsed.scheme.lower() == "http" and not loopback:
+            raise ValueError("remote MCP URL must use HTTPS outside loopback")
         return self
 
 

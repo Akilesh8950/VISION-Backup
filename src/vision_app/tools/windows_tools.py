@@ -77,6 +77,13 @@ def _launch_program(target: str, *, allow_windows_shell_lookup: bool = False) ->
         raise
 
 
+def _require_launch_confirmation(
+    context: ToolContext, title: str, message: str, details: dict, subject: str
+) -> None:
+    if not context.require_confirmation(title, message, details):
+        raise PermissionError(f"User declined to launch {subject}")
+
+
 def open_app(args: schemas.OpenAppArgs, context: ToolContext) -> dict:
     requested = args.app_name.strip().strip("\"'")
     if not requested:
@@ -125,8 +132,22 @@ def open_app(args: schemas.OpenAppArgs, context: ToolContext) -> dict:
 
     executable = shutil.which(mapped)
     if executable:
+        _require_launch_confirmation(
+            context,
+            "Open application?",
+            f"VISION wants to launch {requested}:\n{executable}",
+            {"app_name": requested, "target": executable, "action": "open_app"},
+            requested,
+        )
         return {"app_name": requested, "opened": True, "target": _launch_program(executable)}
 
+    _require_launch_confirmation(
+        context,
+        "Open application?",
+        f"VISION wants to launch {requested}. Windows may resolve this application name through its App Paths.",
+        {"app_name": requested, "target": mapped, "action": "open_app"},
+        requested,
+    )
     allow_shell_lookup = requested.lower() in APP_MAP or bool(_SINGLE_PROGRAM_RE.fullmatch(mapped))
     try:
         target = _launch_program(mapped, allow_windows_shell_lookup=allow_shell_lookup)
@@ -181,7 +202,7 @@ def open_path(args: schemas.OpenPathArgs, context: ToolContext) -> dict:
     return {"path": str(path), "opened": True, "executable": path.suffix.lower() in EXECUTABLE_SUFFIXES}
 
 
-def open_url(args: schemas.OpenUrlArgs, _context: ToolContext) -> dict:
+def open_url(args: schemas.OpenUrlArgs, context: ToolContext) -> dict:
     clean = str(args.url or "").strip()
     try:
         parsed = urlparse(clean)
@@ -201,6 +222,13 @@ def open_url(args: schemas.OpenUrlArgs, _context: ToolContext) -> dict:
         raise PermissionError(
             f"{SAFETY_BLOCK_MESSAGE}: open_url accepts only HTTP/HTTPS URLs without embedded credentials"
         )
+    _require_launch_confirmation(
+        context,
+        "Open web page?",
+        f"VISION wants to open this web page in your browser:\n{clean}",
+        {"url": clean, "action": "open_url"},
+        clean,
+    )
     opened = webbrowser.open(clean)
     return {"url": clean, "opened": bool(opened)}
 

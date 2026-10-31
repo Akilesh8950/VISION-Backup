@@ -314,6 +314,55 @@ def run_launcher(
     return last_code
 
 
+def acquire_launcher_lock(root: Path):
+    """Return an open locked stream, or None when another launcher owns it."""
+
+    stream = (Path(root) / "launcher.lock").open("a+b")
+    try:
+        stream.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        stream.close()
+        return None
+    try:
+        stream.seek(0)
+        stream.truncate()
+        stream.write(f"{os.getpid()}\n".encode("ascii"))
+        stream.flush()
+    except OSError:
+        pass
+    return stream
+
+
+def release_launcher_lock(stream) -> None:
+    if stream is None:
+        return
+    try:
+        stream.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
 def launcher_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -330,10 +379,19 @@ def main(argv: list[str] | None = None) -> int:
         print(LAUNCHER_VERSION)
         return 0
     try:
+        lock_stream = acquire_launcher_lock(root)
+    except OSError as exc:
+        show_notice(root, f"VISION could not start: {exc}")
+        return 1
+    if lock_stream is None:
+        return 0
+    try:
         return run_launcher(root, args)
     except OSError as exc:
         show_notice(root, f"VISION could not start: {exc}")
         return 1
+    finally:
+        release_launcher_lock(lock_stream)
 
 
 if __name__ == "__main__":

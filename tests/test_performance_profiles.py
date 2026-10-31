@@ -19,6 +19,12 @@ WEAK_I3 = HardwareInfo(logical_cores=4, physical_cores=2, total_ram_gb=8.0)
 TINY_RAM = HardwareInfo(logical_cores=4, physical_cores=2, total_ram_gb=4.0)
 STRONG = HardwareInfo(logical_cores=16, physical_cores=8, total_ram_gb=32.0)
 MID = HardwareInfo(logical_cores=8, physical_cores=4, total_ram_gb=16.0)
+LOW_VRAM = HardwareInfo(
+    logical_cores=16, physical_cores=8, total_ram_gb=32.0, gpu_vram_gb=4.0
+)
+HIGH_VRAM = HardwareInfo(
+    logical_cores=16, physical_cores=8, total_ram_gb=32.0, gpu_vram_gb=12.0
+)
 
 
 def _value_after(command: list[str], flag: str) -> str:
@@ -32,6 +38,11 @@ def test_recommended_profile_thresholds() -> None:
     assert recommended_profile(MID) == "balanced"
     # Unknown hardware (zeros) must not force low-end.
     assert recommended_profile(HardwareInfo()) == "balanced"
+    assert recommended_profile(LOW_VRAM) == "low_end"
+    assert recommended_profile(HIGH_VRAM) == "balanced"
+    assert LOW_VRAM.as_dict()["gpu_vram_gb"] == 4.0
+    # Explicit balanced remains an explicit user choice.
+    assert resolve_perf("balanced", 16384, 99, LOW_VRAM).gpu_layers == 99
 
 
 def test_auto_never_picks_performance() -> None:

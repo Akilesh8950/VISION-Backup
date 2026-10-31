@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import tempfile
 from enum import Enum
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -85,6 +87,39 @@ class AppConfig(BaseModel):
         if not 1 <= value <= 65535:
             raise ValueError("port must be between 1 and 65535")
         return value
+
+    @field_validator("remote_base_url", mode="before")
+    @classmethod
+    def _remote_base_url(cls, value: object) -> str:
+        # Clear an unsafe stale value instead of making the whole config
+        # unloadable.  The settings bridge separately reports a newly
+        # entered invalid address and refuses that save.
+        text = str(value or "").strip()
+        if not text or len(text) > 2000:
+            return ""
+        parsed = urlparse(text)
+        try:
+            _port = parsed.port
+        except ValueError:
+            return ""
+        scheme = parsed.scheme.lower()
+        if (
+            scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+            or not text.lower().startswith(f"{scheme}://")
+        ):
+            return ""
+        host = parsed.hostname.lower().rstrip(".")
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if scheme == "http" and not loopback:
+            return ""
+        return text
 
     @field_validator("agent_max_steps", mode="before")
     @classmethod

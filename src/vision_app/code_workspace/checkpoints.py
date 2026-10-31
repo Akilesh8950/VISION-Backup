@@ -5,12 +5,15 @@ import json
 import logging
 import re
 import shutil
+import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 MAX_CHECKPOINT_BYTES = 25 * 1024 * 1024
 MAX_CHECKPOINT_METADATA_BYTES = 1024 * 1024
+MAX_CHECKPOINTS = 100
+MAX_CHECKPOINT_TOTAL_BYTES = 250 * 1024 * 1024
 _CHECKPOINT_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 logger = logging.getLogger(__name__)
 
@@ -35,11 +38,76 @@ def _read_metadata(path: Path) -> dict:
 
 
 class CheckpointManager:
-    def __init__(self, root: Path):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        max_checkpoints: int = MAX_CHECKPOINTS,
+        max_total_bytes: int = MAX_CHECKPOINT_TOTAL_BYTES,
+    ):
         self.root = root
+        self.max_checkpoints = max(1, int(max_checkpoints))
+        self.max_total_bytes = max(1024, int(max_total_bytes))
+        self._lock = threading.RLock()
         self.root.mkdir(parents=True, exist_ok=True)
+        self.prune()
+
+    def _entries_by_age(self) -> list[tuple[str, Path, int]]:
+        entries: list[tuple[str, float, str, Path, int]] = []
+        for directory in self.root.iterdir():
+            if not directory.is_dir() or not _CHECKPOINT_ID_RE.fullmatch(directory.name):
+                continue
+            metadata_file = directory / "metadata.json"
+            created = ""
+            if metadata_file.is_file():
+                try:
+                    metadata = _read_metadata(metadata_file)
+                    created = str(metadata.get("created_at") or "")
+                except (OSError, ValueError, json.JSONDecodeError):
+                    created = ""
+            try:
+                mtime = directory.stat().st_mtime
+                size = sum(
+                    child.stat().st_size
+                    for child in directory.iterdir()
+                    if child.is_file()
+                )
+            except OSError:
+                continue
+            entries.append((created, mtime, directory.name, directory, size))
+        entries.sort(key=lambda item: (item[0], item[1], item[2]))
+        return [(name, directory, size) for _created, _mtime, name, directory, size in entries]
+
+    def prune(self, *, keep_id: str = "") -> list[str]:
+        """Enforce count/total-size retention, always preserving the newest."""
+
+        removed: list[str] = []
+        with self._lock:
+            entries = self._entries_by_age()
+            total = sum(size for _name, _directory, size in entries)
+            # entries are oldest-first.  Never delete the final (newest)
+            # entry merely because a caller configured a tiny total cap.
+            while len(entries) > 1 and (
+                len(entries) > self.max_checkpoints or total > self.max_total_bytes
+            ):
+                name, directory, size = entries[0]
+                if name == keep_id:
+                    break
+                entries.pop(0)
+                try:
+                    shutil.rmtree(directory)
+                except OSError:
+                    logger.warning("Could not prune old checkpoint %s", name, exc_info=True)
+                    break
+                removed.append(name)
+                total -= size
+        return removed
 
     def snapshot(self, path: Path, conversation_id: str = "") -> str:
+        with self._lock:
+            return self._snapshot_locked(path, conversation_id)
+
+    def _snapshot_locked(self, path: Path, conversation_id: str = "") -> str:
         checkpoint_id = uuid.uuid4().hex
         directory = self.root / checkpoint_id
         directory.mkdir(parents=True)
@@ -68,6 +136,7 @@ class CheckpointManager:
                 "created_at": datetime.now(UTC).isoformat(),
             }
             (directory / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            self.prune(keep_id=checkpoint_id)
             return checkpoint_id
         except BaseException:
             shutil.rmtree(directory, ignore_errors=True)

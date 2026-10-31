@@ -20,6 +20,7 @@ from .paths import AppPaths, get_paths
 from .projects import ProjectStore
 from .python_helper import RUN_PYTHON_HELPER_ARG, run_python_script
 from .server.manager import LlamaServerManager
+from .single_instance import single_instance_lock_for
 from .sync_service import SyncService
 from .telemetry.needs_log import NeedsLog
 from .tools.context import ToolContext
@@ -158,7 +159,13 @@ def build_services(
     )
 
 
-def _run_qt(argv: list[str], *, dev_channel: bool = False, offline: bool = False) -> int:
+def _run_qt(
+    argv: list[str],
+    *,
+    dev_channel: bool = False,
+    offline: bool = False,
+    paths: AppPaths | None = None,
+) -> int:
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     from .constants import PRODUCT_NAME
@@ -167,7 +174,7 @@ def _run_qt(argv: list[str], *, dev_channel: bool = False, offline: bool = False
 
     app = QApplication([sys.argv[0], *[arg for arg in argv if arg != "--qt"]])
     app.setApplicationName(PRODUCT_NAME)
-    services = build_services(dev_channel=dev_channel, offline=offline)
+    services = build_services(paths, dev_channel=dev_channel, offline=offline)
     app.setStyleSheet(stylesheet(services.config.theme))
     try:
         window = MainWindow(services)
@@ -208,13 +215,27 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_selftest()
 
-    if options.qt:
-        return _run_qt(args, dev_channel=options.dev_channel, offline=options.offline)
+    paths = get_paths()
+    paths.ensure()
+    instance_lock = single_instance_lock_for(paths)
+    if not instance_lock.acquire():
+        print("VISION is already running for this data folder.", file=sys.stderr)
+        return 0
+    try:
+        if options.qt:
+            return _run_qt(
+                args,
+                dev_channel=options.dev_channel,
+                offline=options.offline,
+                paths=paths,
+            )
 
-    from .web_bridge import run_web_app
+        from .web_bridge import run_web_app
 
-    services = build_services(dev_channel=options.dev_channel, offline=options.offline)
-    return run_web_app(services, debug=options.debug)
+        services = build_services(paths, dev_channel=options.dev_channel, offline=options.offline)
+        return run_web_app(services, debug=options.debug)
+    finally:
+        instance_lock.release()
 
 
 if __name__ == "__main__":

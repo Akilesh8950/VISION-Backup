@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from vision_app.chat.controller import ChatCallbacks, ChatController
+from vision_app.chat.controller import ChatCallbacks, ChatController, TurnResult
 from vision_app.config import AppConfig, EndpointMode
 from vision_app.history import HistoryStore
 from vision_app.paths import AppPaths
@@ -119,6 +119,30 @@ def _controller(tmp_path, client, registry=None):
         tool_context=context,
     )
     return history, conversation, controller
+
+
+def test_agent_mode_never_enables_python_approval_by_itself(tmp_path):
+    _history, conversation, controller = _controller(tmp_path, FakeClient())
+    context = controller.tool_context
+    seen = []
+
+    async def fake_impl(*_args, **_kwargs):
+        seen.append((context.agent_auto_approve, context.auto_approve_python))
+        return TurnResult(conversation_id=conversation)
+
+    controller._run_turn_impl = fake_impl  # type: ignore[method-assign]
+
+    asyncio.run(controller.run_turn(conversation, "Goal", agent_mode=True))
+    assert seen == [(True, False)]
+    assert context.agent_auto_approve is False
+    assert context.auto_approve_python is False
+
+    # The separate UI-owned, session-only opt-in is preserved; Agent mode
+    # neither creates nor clears it.
+    context.auto_approve_python = True
+    asyncio.run(controller.run_turn(conversation, "Goal", agent_mode=True))
+    assert seen[-1] == (True, True)
+    assert context.auto_approve_python is True
 
 
 def test_second_round_stream_failure_persists_current_partial_not_first_round_text(tmp_path):

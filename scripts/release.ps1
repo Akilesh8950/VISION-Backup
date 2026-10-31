@@ -11,7 +11,10 @@ param(
     [switch]$SkipInstall,
     [switch]$SkipBuild,
     [switch]$SkipLauncher,
-    [switch]$Publish
+    [switch]$Publish,
+    [string]$SigningKey = "",
+    [string]$SigningKeyId = "",
+    [switch]$SignConfig
 )
 
 # Release ritual for the three-channel update system.
@@ -138,6 +141,27 @@ $Manifest = [ordered]@{
 $ManifestName = if ($Channel -eq "dev") { "latest-dev.json" } else { "latest.json" }
 $ManifestPath = Join-Path $Root $ManifestName
 $Manifest | ConvertTo-Json -Depth 3 | Set-Content $ManifestPath -Encoding UTF8
+
+if ($SigningKey -or $SigningKeyId) {
+    if (-not $SigningKey -or -not $SigningKeyId) {
+        throw "-SigningKey and -SigningKeyId must be supplied together."
+    }
+    $SigningScript = Join-Path $Root "scripts\release_signing.py"
+    & $Python $SigningScript sign --private-key $SigningKey --key-id $SigningKeyId --purpose "app-manifest-$Channel" $ManifestPath
+    if ($LASTEXITCODE -ne 0) { throw "Manifest signing failed with exit code $LASTEXITCODE" }
+    if ($SignConfig) {
+        $ConfigName = if ($Channel -eq "dev") { "config-dev.json" } else { "config.json" }
+        $ConfigPath = Join-Path $Root "updates\$ConfigName"
+        & $Python $SigningScript sign --private-key $SigningKey --key-id $SigningKeyId --purpose "remote-config-$Channel" $ConfigPath
+        if ($LASTEXITCODE -ne 0) { throw "Config signing failed with exit code $LASTEXITCODE" }
+    }
+}
+elseif ($Publish) {
+    throw "Refusing to publish an unsigned app manifest. Supply -SigningKey and -SigningKeyId (and -SignConfig when the config changed)."
+}
+else {
+    Write-Warning "Manifest is unsigned and will be rejected by signed-release builds until scripts\release_signing.py signs it."
+}
 
 Write-Host "Staged launcher tree: $TreeRoot"
 Write-Host "App update ZIP:       $AppZip"

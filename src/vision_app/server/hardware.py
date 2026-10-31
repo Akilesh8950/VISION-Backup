@@ -24,6 +24,8 @@ are deterministic on any machine.
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 
 PROFILES = ("auto", "balanced", "performance", "low_end")
@@ -34,16 +36,59 @@ class HardwareInfo:
     logical_cores: int = 0
     physical_cores: int = 0
     total_ram_gb: float = 0.0
+    gpu_vram_gb: float = 0.0
+    gpu_free_vram_gb: float = 0.0
+    gpu_name: str = ""
 
-    def as_dict(self) -> dict[str, float | int]:
+    def as_dict(self) -> dict[str, float | int | str]:
         return {
             "logical_cores": int(self.logical_cores or 0),
             "physical_cores": int(self.physical_cores or 0),
             "total_ram_gb": round(float(self.total_ram_gb or 0.0), 1),
+            "gpu_vram_gb": round(float(self.gpu_vram_gb or 0.0), 1),
+            "gpu_free_vram_gb": round(float(self.gpu_free_vram_gb or 0.0), 1),
+            "gpu_name": str(self.gpu_name or ""),
         }
 
 
 _cached_hardware: HardwareInfo | None = None
+
+
+def _detect_nvidia_vram() -> tuple[float, float, str]:
+    executable = shutil.which("nvidia-smi")
+    if not executable:
+        return 0.0, 0.0, ""
+    try:
+        completed = subprocess.run(
+            [
+                executable,
+                "--query-gpu=name,memory.total,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0.0, 0.0, ""
+    if completed.returncode != 0:
+        return 0.0, 0.0, ""
+    best: tuple[float, float, str] = (0.0, 0.0, "")
+    for line in str(completed.stdout or "").splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 3:
+            continue
+        try:
+            total_mb = float(parts[-2])
+            free_mb = float(parts[-1])
+        except ValueError:
+            continue
+        candidate = (total_mb / 1024.0, free_mb / 1024.0, ", ".join(parts[:-2]))
+        if candidate[0] > best[0]:
+            best = candidate
+    return best
 
 
 def detect_hardware() -> HardwareInfo:
@@ -72,8 +117,14 @@ def detect_hardware() -> HardwareInfo:
         logical = int(os.cpu_count() or 1)
     if physical <= 0 or physical > logical:
         physical = max(1, logical // 2) if logical > 1 else logical
+    gpu_vram_gb, gpu_free_vram_gb, gpu_name = _detect_nvidia_vram()
     _cached_hardware = HardwareInfo(
-        logical_cores=logical, physical_cores=physical, total_ram_gb=ram_gb
+        logical_cores=logical,
+        physical_cores=physical,
+        total_ram_gb=ram_gb,
+        gpu_vram_gb=gpu_vram_gb,
+        gpu_free_vram_gb=gpu_free_vram_gb,
+        gpu_name=gpu_name,
     )
     return _cached_hardware
 
@@ -90,7 +141,11 @@ def recommended_profile(hw: HardwareInfo) -> str:
 
     constrained_ram = 0.0 < hw.total_ram_gb < 10.0
     constrained_cpu = 0 < hw.logical_cores <= 4
-    return "low_end" if (constrained_ram or constrained_cpu) else "balanced"
+    # The Q4 weights alone are about 5.24 GiB.  Full GPU offload also needs
+    # KV cache and compute buffers; a known-small discrete GPU is safer in
+    # the CPU low-end profile under Auto.  Explicit profiles still win.
+    constrained_vram = 0.0 < hw.gpu_vram_gb < 7.5
+    return "low_end" if (constrained_ram or constrained_cpu or constrained_vram) else "balanced"
 
 
 def effective_profile(profile: str, hw: HardwareInfo) -> str:

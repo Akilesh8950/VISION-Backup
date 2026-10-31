@@ -31,8 +31,7 @@ git clone https://github.com/Akilesh8950/VISION.git VISION-smoke
 cd VISION-smoke
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements-win311.lock.txt
 python -m pip install -e . --no-deps
 ```
 
@@ -305,15 +304,18 @@ Repeat one chart/table test in light theme and with the window narrowed.
 
 Test with disposable files only:
 
-1. `list_running_apps`, open Notepad, focus it by title substring, open a URL;
+1. `list_running_apps`, open Notepad, focus it by title substring, open a URL.
+   The model-requested app and URL launches must each ask first;
 2. clipboard set/get with a short value;
 3. clipboard set with more than 2,000 characters and confirm approval;
 4. set a 0.1-minute timer and confirm the toast/banner fires;
 5. remember a harmless preference, restart, and ask for it back;
 6. run approved Python `print(6*7)`; deny a second run and confirm the chat
-   remains usable;
-7. attempt an outside-workspace write, a `..` path and opening an executable.
-   Deny each confirmation once and approve only a disposable safe case.
+   remains usable. Repeat in Agent mode and confirm Agent mode alone still
+   shows the Python preview;
+7. attempt an outside-workspace write, a `..` path, opening an executable,
+   and opening a harmless plain-text file. Every model-requested launch must
+   ask. Deny each confirmation once and approve only a disposable safe case.
    Confirm absolute paths are shown before writes;
 8. attempt a system-path write and confirm it is blocked;
 9. ask the model to delete a file, kill a process, edit the registry or run a
@@ -479,9 +481,11 @@ profile folder:
 8. Close VISION, copy the entire folder to a second test path, launch from the
    copy, and confirm history/settings are present. Record that Windows
    Credential Manager secrets are intentionally not inside the copied folder.
-9. Uninstall from Windows Settings and confirm program files/shortcuts are
-   removed while `data\` and `workspace\` remain. Manually delete the test
-   folder only after recording that preservation behaviour.
+9. Uninstall from Windows Settings and confirm program files/shortcuts and
+   the positively recognised launcher-managed `versions\`, `downloads\`, and
+   launcher state files are removed while `data\` and `workspace\` remain.
+   Manually delete the test folder only after recording that preservation
+   behaviour.
 
 ### 14.2 All-users standard install
 
@@ -513,16 +517,19 @@ For a release candidate, use a disposable launcher-managed test install:
    exposing update URLs or secrets.
 2. Run **Check now** per channel with the network disconnected; VISION should
    keep last-known status with no modal crash.
-3. Stage a test app update from the local proof manifest, confirm the running
-   app writes only `downloads\`, `versions\<new>\`, and `pending.json`, then
+3. In a test build that embeds the disposable test public key, stage a test
+   app update from a signed local proof manifest. Confirm the running app
+   writes only `downloads\`, `versions\<new>\`, and `pending.json`, then
    click **Restart to apply** and confirm the outer launcher—not the running
-   app—rewrites `current.json` and relaunches the new version.
+   app—rewrites `current.json` and relaunches the new version. An unsigned
+   production manifest must be rejected before any ZIP download.
 4. Force the staged test version to exit non-zero twice within 60 seconds and
    confirm the launcher rolls back to the previous version and shows one
    notice.
 5. Download a model update while a conversation exists and confirm it remains
-   pending until the next launch; apply a malformed remote config and confirm
-   the bundled/cached prompt and tool schemas stay active.
+   pending until the next launch; apply malformed and unsigned remote configs
+   and confirm the bundled or previously verified cached prompt and tool
+   schemas stay active.
 
 ## 15. Vision Live (Windows-native checks)
 
@@ -556,7 +563,67 @@ Windows build:
    frame. Repeat with the backup connection configured and the local server
    stopped; the frame must refuse to send rather than fail over remotely.
 
-## 16. Minimum pass gate
+## 16. Deployment-safety regressions (Windows-native)
+
+Use disposable installs, folders, and test keys for every check in this
+section:
+
+1. **Separate Python opt-in.** On a fresh launch, confirm
+   **Settings → Tools → Allow Python without asking (this session only)** is
+   off. Ask in Agent mode for Python and confirm the code preview still
+   appears and declining runs nothing. Turn the toggle on only after the
+   warning confirmation, confirm a harmless `print(6*7)` can run without a
+   second prompt, then fully close and relaunch VISION and confirm the
+   toggle is off again. Toggling Chat/Agent must never change it.
+2. **Every launch asks.** In both Chat and Agent modes, ask the model to open
+   a harmless plain-text file, Notepad/Calculator, and an `https://` page.
+   Decline each first request and confirm nothing launches; then approve one
+   harmless case of each kind.
+3. **Isolated regex search.** Create a disposable text file containing 35
+   `a` characters followed by `!`, then ask `search_code` to use
+   `(a+)+$`. The app must stay responsive, return a search-timeout error
+   instead of freezing, and leave no helper process consuming CPU in Task
+   Manager.
+4. **Single instance.** While VISION is running, launch the same installed
+   app and outer launcher again. Confirm no second main window, model
+   server, or update-state writer starts. Close the first instance and
+   confirm a fresh launch works normally.
+5. **Installer reserved folders.** Create an unrelated test folder with
+   non-empty `versions\` and `downloads\` sentinel files. Both the interactive
+   installer and a silent install using that directory must refuse to
+   install, and both sentinel files must remain byte-for-byte untouched.
+   Then break the managed-tree evidence in a disposable real install (for
+   example, remove its versioned `VISION.exe` after backing it up) and
+   uninstall; the unmanaged-looking `versions\`/`downloads\` content must not
+   be recursively deleted, while normal program shortcuts are removed.
+6. **Non-writable update root.** In the all-users Program Files install, run
+   an App update check/download as the non-elevated user. Confirm VISION
+   reports that it cannot write to its update folder and directs the user to
+   a current-user/portable install or manual Setup, without first downloading
+   the update ZIP.
+7. **Signed update JSON.** In a disposable test build embedding only a test
+   public key, confirm correctly signed stable and dev manifests/configs are
+   accepted only for their matching channel/purpose. Remove the signature,
+   alter one signed field, and replay a dev-signed file as stable; each must
+   be rejected with no app ZIP staged and no config change. A production
+   build whose `RELEASE_PUBLIC_KEYS` is still empty must fail closed.
+8. **HTTPS boundaries.** Try to enable a public `http://` MCP/connector URL
+   and save a public `http://` backup model address; both must be rejected.
+   Confirm `http://127.0.0.1:<port>` remains available for local test
+   servers. With a generic OAuth test provider, send a wrong `state` to the
+   loopback callback and confirm sign-in does not complete; the correct
+   state may complete it.
+9. **Bounded local growth and model smoke.** Create and restore the newest
+   code checkpoint in a disposable project. On an NVIDIA machine with less
+   than 7.5 GiB VRAM, confirm Auto selects the low-end profile; during a
+   model smoke test, confirm the side server is CPU-only/bounded and does
+   not allocate a second full GPU copy. The automated suite proves the
+   100-checkpoint/250 MiB pruning and RAM preflight arithmetic.
+10. **Source-only helper.** Confirm neither the source ZIP nor the installed
+    public package contains `setup_helper\VISION-Create-Folders.exe` or its
+    checksum file.
+
+## 17. Minimum pass gate
 
 Do not call the Windows build release-ready unless all are true:
 
@@ -576,4 +643,8 @@ Do not call the Windows build release-ready unless all are true:
 - Vision Live offline push-to-talk, local transcription, captions/TTS,
   one-frame preview gating, mini-window behaviour, and no-audio/no-screenshot
   retention checks in section 15 pass;
+- every deployment-safety regression in section 16 passes, including
+  separate Python opt-in, universal launch confirmation, single-instance
+  behaviour, installer reserved-folder protection, signed-update rejection,
+  and HTTPS outside loopback;
 - no crash, secret leak, unconsented extension action or history loss occurs.

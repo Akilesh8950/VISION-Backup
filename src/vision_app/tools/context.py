@@ -22,10 +22,13 @@ class ToolContext:
     sandbox: PathSandbox
     conversation_id: str = ""
     confirm: ConfirmCallback | None = None
+    # Separate, explicit session-only opt-in.  Chat/Agent mode selection
+    # never changes this flag; the UI owns it and it defaults to False on
+    # every process start.
     auto_approve_python: bool = False
     # Agentic mode: registry-level "ask" prompts for safe builtin tools are
     # auto-approved.  Tool-level safety confirmations (outside-workspace
-    # writes, executable opens, huge clipboard sets) still always ask.
+    # writes, launches, huge clipboard sets) still always ask.
     agent_auto_approve: bool = False
     timer_callback: TimerCallback | None = None
     checkpoint_callback: CheckpointCallback | None = None

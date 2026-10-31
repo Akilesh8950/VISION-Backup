@@ -77,15 +77,19 @@ Source: "{#SourceRoot}\installer\{#PortableMarker}"; DestDir: "{app}"; Check: Us
 Type: files; Name: "{app}\{#PortableMarker}"; Check: UseStandardData
 
 [UninstallDelete]
-; Downloaded app versions are program files, not user data. Remove the
-; launcher-managed payloads/cache on uninstall while still leaving portable
-; data\ and workspace\ untouched above the installer layer.
-Type: filesandordirs; Name: "{app}\versions"
-Type: filesandordirs; Name: "{app}\downloads"
-Type: files; Name: "{app}\current.json"
-Type: files; Name: "{app}\pending.json"
-Type: files; Name: "{app}\launcher-state.json"
-Type: files; Name: "{app}\rollback-notice.txt"
+; Downloaded app versions are program files, not user data.  Recursively
+; remove them only when the complete launcher tree is positively recognised
+; (outer VISION.exe + current.json + matching versioned VISION.exe).  If a
+; user chose a directory containing unrelated "versions"/"downloads" folders,
+; the install-time check blocks commingling; this uninstall check is the
+; second line of defence.  Portable data\ and workspace\ are never deleted.
+Type: filesandordirs; Name: "{app}\versions"; Check: IsVisionManagedInstall
+Type: filesandordirs; Name: "{app}\downloads"; Check: IsVisionManagedInstall
+Type: files; Name: "{app}\current.json"; Check: IsVisionManagedInstall
+Type: files; Name: "{app}\pending.json"; Check: IsVisionManagedInstall
+Type: files; Name: "{app}\launcher-state.json"; Check: IsVisionManagedInstall
+Type: files; Name: "{app}\launcher.lock"; Check: IsVisionManagedInstall
+Type: files; Name: "{app}\rollback-notice.txt"; Check: IsVisionManagedInstall
 
 [Icons]
 Name: "{autoprograms}\VISION"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: startmenuicon
@@ -99,6 +103,8 @@ Filename: "{app}\{#AppExeName}"; Description: "Launch VISION"; WorkingDir: "{app
 var
   DataModePage: TInputOptionWizardPage;
   PreviousInstalledVersion: String;
+  VisionManagedChecked: Boolean;
+  VisionManagedInstallValue: Boolean;
 
 function UsePortableData: Boolean;
 begin
@@ -148,12 +154,109 @@ begin
     Result := ExtractCurrentVersion(String(Raw));
 end;
 
+function IsSafeVersionComponent(const Version: String): Boolean;
+var
+  I: Integer;
+  Ch: Char;
+begin
+  Result := False;
+  if (Length(Version) < 5) or (Length(Version) > 40) then Exit;
+  if (Version[1] = '.') or (Version[Length(Version)] = '.') then Exit;
+  for I := 1 to Length(Version) do
+  begin
+    Ch := Version[I];
+    if not (
+      ((Ch >= '0') and (Ch <= '9')) or
+      ((Ch >= 'A') and (Ch <= 'Z')) or
+      ((Ch >= 'a') and (Ch <= 'z')) or
+      (Ch = '.') or (Ch = '-') or (Ch = '+')
+    ) then Exit;
+  end;
+  Result := True;
+end;
+
+function IsVisionManagedTree(const RootDir: String): Boolean;
+var
+  Raw: AnsiString;
+  Version: String;
+  RootWithSlash: String;
+begin
+  Result := False;
+  RootWithSlash := AddBackslash(RootDir);
+  if not FileExists(RootWithSlash + '{#AppExeName}') then Exit;
+  if not LoadStringFromFile(RootWithSlash + 'current.json', Raw) then Exit;
+  Version := ExtractCurrentVersion(String(Raw));
+  if not IsSafeVersionComponent(Version) then Exit;
+  Result := FileExists(RootWithSlash + 'versions\' + Version + '\{#AppExeName}');
+end;
+
+function IsVisionManagedInstall: Boolean;
+begin
+  if not VisionManagedChecked then
+  begin
+    VisionManagedChecked := True;
+    VisionManagedInstallValue := IsVisionManagedTree(ExpandConstant('{app}'));
+  end;
+  Result := VisionManagedInstallValue;
+end;
+
+function DirHasEntries(const Dir: String): Boolean;
+var
+  FindRec: TFindRec;
+begin
+  Result := False;
+  if not DirExists(Dir) then Exit;
+  if FindFirst(AddBackslash(Dir) + '*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+        begin
+          Result := True;
+          Break;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+function HasUnmanagedReservedDirectories(const RootDir: String): Boolean;
+begin
+  Result := False;
+  if IsVisionManagedTree(RootDir) then Exit;
+  Result := DirHasEntries(AddBackslash(RootDir) + 'versions') or
+            DirHasEntries(AddBackslash(RootDir) + 'downloads');
+end;
+
+function CheckReservedDirectories: Boolean;
+var
+  SelectedDir: String;
+begin
+  Result := True;
+  SelectedDir := WizardDirValue;
+  if HasUnmanagedReservedDirectories(SelectedDir) then
+  begin
+    MsgBox(
+      'The selected folder already contains a non-empty "versions" or "downloads" folder, ' +
+      'but it is not a recognised VISION installation. Those folder names are reserved for ' +
+      'VISION updates. Please choose an empty or dedicated installation folder so unrelated ' +
+      'files are never mixed with VISION program files.',
+      mbError,
+      MB_OK
+    );
+    Result := False;
+  end;
+end;
+
 procedure WriteCurrentJson;
 var
   PreviousVersion: String;
   Content: String;
 begin
   PreviousVersion := PreviousInstalledVersion;
+  if not IsSafeVersionComponent(PreviousVersion) then PreviousVersion := '';
   if (PreviousVersion = '') or (CompareText(PreviousVersion, '{#AppVersion}') = 0) then
     PreviousVersion := '';
   if (PreviousVersion <> '') and
@@ -231,7 +334,9 @@ begin
     'folder you control. It keeps the app, downloaded model, llama.cpp, settings, history, logs, ' +
     'skills, WebView2 profile and tool workspace under that one folder.' + #13#10 + #13#10 +
     'Standard mode keeps per-user data under %LOCALAPPDATA%\VISION and the tool workspace under ' +
-    '%USERPROFILE%\VISION\workspace. Choose Standard for an all-users/Program Files install.',
+    '%USERPROFILE%\VISION\workspace. Choose Standard for an all-users/Program Files install. ' +
+    'Administrator-owned installs use Setup for later app updates; in-app app updates need an ' +
+    'installation folder your Windows account can write to.',
     True,
     False
   );
@@ -323,13 +428,29 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
-  if (CurPageID = wpSelectDir) and UsePortableData then
-    Result := CheckPortableDirectory;
+  if CurPageID = wpSelectDir then
+  begin
+    Result := CheckReservedDirectories;
+    if Result and UsePortableData then
+      Result := CheckPortableDirectory;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  NeedsRestart := False;
+  { Also enforce the reserved-directory guard for silent installs and for
+    files created after the directory page was accepted. }
+  if HasUnmanagedReservedDirectories(ExpandConstant('{app}')) then
+    Result := 'The selected installation folder already contains a non-empty "versions" or "downloads" folder that is not part of a recognised VISION installation. Choose an empty or dedicated VISION folder.';
 end;
 
 function InitializeUninstall: Boolean;
 begin
   Result := True;
+  { Evaluate and cache the managed-tree check before uninstall deletes files. }
+  VisionManagedInstallValue := IsVisionManagedInstall;
   if FileExists(ExpandConstant('{app}\{#PortableMarker}')) then
   begin
     MsgBox(

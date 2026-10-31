@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 from ..python_helper import RUN_PYTHON_HELPER_ARG
@@ -18,6 +18,68 @@ MAX_LIST_SCAN = 5_000
 MAX_SEARCH_BYTES = 25_000_000
 SEARCH_TIME_LIMIT_SECONDS = 10.0
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", "dist", "build", ".mypy_cache", ".pytest_cache"}
+
+# Regex evaluation is deliberately not performed in the app process: a
+# catastrophic pattern can monopolise a Python thread in a way no in-process
+# timer can stop.  This fixed, stdlib-only worker receives its job as JSON
+# data (never as code) and is killed as a whole process on timeout.
+_SEARCH_WORKER_SOURCE = r'''
+import json
+import re
+import time
+from pathlib import Path
+
+
+def is_binary(data):
+    return b"\x00" in data[:8192]
+
+
+def main():
+    with open(JOB_PATH, encoding="utf-8") as stream:
+        job = json.load(stream)
+    pattern = re.compile(str(job["pattern"]))
+    max_file_bytes = int(job["max_file_bytes"])
+    max_search_bytes = int(job["max_search_bytes"])
+    deadline = time.monotonic() + float(job["deadline_seconds"])
+    limit_reached = bool(job["scan_truncated"])
+    matches = []
+    scanned_bytes = 0
+    for raw_path in job["files"]:
+        if time.monotonic() >= deadline or scanned_bytes >= max_search_bytes:
+            limit_reached = True
+            break
+        path = Path(str(raw_path))
+        try:
+            if path.stat().st_size > max_file_bytes:
+                continue
+            with path.open("rb") as stream:
+                data = stream.read(max_file_bytes + 1)
+            if len(data) > max_file_bytes:
+                continue
+            scanned_bytes += len(data)
+            if is_binary(data):
+                continue
+            text = data.decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if line_number % 200 == 0 and time.monotonic() >= deadline:
+                limit_reached = True
+                break
+            if pattern.search(line):
+                matches.append(
+                    {"path": str(path), "line": line_number, "text": line[:500]}
+                )
+                if len(matches) >= 200:
+                    print(json.dumps({"matches": matches, "truncated": True}))
+                    return
+        if limit_reached:
+            break
+    print(json.dumps({"matches": matches, "truncated": limit_reached}))
+
+
+main()
+'''
 
 
 def _confirmed_path(context: ToolContext, raw: str, action: str) -> Path:
@@ -120,7 +182,7 @@ def list_files(args: schemas.ListFilesArgs, context: ToolContext) -> dict:
 def search_code(args: schemas.SearchCodeArgs, context: ToolContext) -> dict:
     root = _confirmed_path(context, args.path, "read")
     try:
-        pattern = re.compile(args.pattern)
+        re.compile(args.pattern)
     except re.error as exc:
         raise RuntimeError(f"Invalid regular expression: {exc}") from exc
     files: list[Path]
@@ -154,39 +216,13 @@ def search_code(args: schemas.SearchCodeArgs, context: ToolContext) -> dict:
     else:
         raise FileNotFoundError(f"Path not found: {root}")
 
-    matches: list[dict] = []
-    scanned_bytes = 0
-    deadline = time.monotonic() + SEARCH_TIME_LIMIT_SECONDS
-    limit_reached = scan_truncated
-    for path in files:
-        if time.monotonic() >= deadline or scanned_bytes >= MAX_SEARCH_BYTES:
-            limit_reached = True
-            break
-        try:
-            size = path.stat().st_size
-            if size > MAX_FILE_BYTES:
-                continue
-            with path.open("rb") as stream:
-                data = stream.read(MAX_FILE_BYTES + 1)
-            if len(data) > MAX_FILE_BYTES:
-                continue
-            scanned_bytes += len(data)
-            if _is_binary(data):
-                continue
-            text = data.decode("utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            if line_number % 200 == 0 and time.monotonic() >= deadline:
-                limit_reached = True
-                break
-            if pattern.search(line):
-                matches.append({"path": str(path), "line": line_number, "text": line[:500]})
-                if len(matches) >= 200:
-                    return {"path": str(root), "matches": matches, "truncated": True}
-        if limit_reached:
-            break
-    return {"path": str(root), "matches": matches, "truncated": limit_reached}
+    result = _run_isolated_search(
+        context,
+        pattern=args.pattern,
+        files=files,
+        scan_truncated=scan_truncated,
+    )
+    return {"path": str(root), **result}
 
 
 def _python_command(script: Path) -> list[str]:
@@ -210,6 +246,92 @@ def _scrubbed_environment() -> dict[str, str]:
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONNOUSERSITE"] = "1"
     return env
+
+
+def _run_isolated_search(
+    context: ToolContext,
+    *,
+    pattern: str,
+    files: list[Path],
+    scan_truncated: bool,
+) -> dict:
+    job_path: Path | None = None
+    worker_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", prefix="vision-search-", delete=False, encoding="utf-8"
+        ) as stream:
+            json.dump(
+                {
+                    "pattern": pattern,
+                    "files": [str(path) for path in files],
+                    "max_file_bytes": MAX_FILE_BYTES,
+                    "max_search_bytes": MAX_SEARCH_BYTES,
+                    "deadline_seconds": SEARCH_TIME_LIMIT_SECONDS,
+                    "scan_truncated": scan_truncated,
+                },
+                stream,
+            )
+            job_path = Path(stream.name)
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".py", prefix="vision-search-worker-", delete=False, encoding="utf-8"
+        ) as stream:
+            stream.write(f"JOB_PATH = {str(job_path)!r}\n")
+            stream.write(_SEARCH_WORKER_SOURCE)
+            worker_path = Path(stream.name)
+        try:
+            completed = run_bounded(
+                _python_command(worker_path),
+                cwd=context.sandbox.workspace,
+                env=_scrubbed_environment(),
+                timeout=SEARCH_TIME_LIMIT_SECONDS + 2.0,
+                stdout_chars=1_000_000,
+                stderr_chars=4_000,
+                stdout_mode="head",
+                stderr_mode="head",
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "Search timed out; the regular expression may be too expensive. "
+                "Try a simpler pattern or a narrower folder."
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError("The isolated search worker could not start") from exc
+    finally:
+        for candidate in (worker_path, job_path):
+            if candidate is not None:
+                try:
+                    candidate.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    if completed.returncode != 0:
+        detail = completed.stderr.strip().splitlines()[-1:] or []
+        suffix = f": {detail[0][:300]}" if detail else ""
+        raise RuntimeError(f"The isolated search worker failed{suffix}")
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("The isolated search worker returned malformed results") from exc
+    raw_matches = payload.get("matches") if isinstance(payload, dict) else None
+    if not isinstance(raw_matches, list):
+        raise RuntimeError("The isolated search worker returned malformed results")
+    matches: list[dict] = []
+    for item in raw_matches[:200]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            line = int(item.get("line") or 0)
+        except (TypeError, ValueError):
+            continue
+        matches.append(
+            {
+                "path": str(item.get("path") or ""),
+                "line": line,
+                "text": str(item.get("text") or "")[:500],
+            }
+        )
+    return {"matches": matches, "truncated": bool(payload.get("truncated"))}
 
 
 def run_python(args: schemas.RunPythonArgs, context: ToolContext) -> dict:

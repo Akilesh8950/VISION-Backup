@@ -28,3 +28,8 @@ app/frontend/node_modules/
 /screenshots.html
 /vision-soothing-voice-sample.mp3
 /result.json
+
+# Local locks and locally rebuilt optional helper (public packages are source-only)
+/launcher.lock
+setup_helper/*.exe
+setup_helper/*.sha256

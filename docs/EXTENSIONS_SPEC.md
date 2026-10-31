@@ -77,7 +77,8 @@ Baseline proposal:
    child process and speaks newline-delimited JSON-RPC on stdin/stdout; stderr
    is captured as log text.
 2. **Streamable HTTP** for remote/local service servers at a single MCP
-   endpoint, with optional Bearer/API-key/custom headers.
+   endpoint, with optional Bearer/API-key/custom headers. Enabled URLs
+   outside loopback must use HTTPS and must not embed credentials.
 
 Legacy HTTP+SSE is not in the baseline proposal. It becomes a compatibility
 choice only if a named server requires it.

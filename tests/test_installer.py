@@ -119,6 +119,12 @@ def test_inno_setup_offers_scope_portable_mode_and_optimized_compression() -> No
     assert 'Name: "{app}\\versions"' in script
     assert 'Name: "{app}\\downloads"' in script
     assert 'Type: filesandordirs; Name: "{app}\\versions"' in script
+    assert "IsVisionManagedTree" in script
+    assert "IsSafeVersionComponent" in script
+    assert "HasUnmanagedReservedDirectories" in script
+    assert "CheckReservedDirectories" in script
+    assert "PrepareToInstall" in script
+    assert script.count("Check: IsVisionManagedInstall") >= 7
     assert "GetSpaceOnDisk64" in script
     assert "F3017226-FE2A-4295-8BDF-00C3A9A7E4C5" in script
     assert "runasoriginaluser" in script
@@ -139,6 +145,22 @@ def test_installer_build_wrapper_produces_checksums_and_refuses_dirty_dist() -> 
     assert '"current.json"' in script
     assert '/DDistDir=$PayloadDir' in script
     assert "VISION-Setup-$Version-x64.exe" in script
+
+
+def test_windows_build_uses_hash_locked_python_311_dependencies() -> None:
+    build = (ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
+    lock = (ROOT / "requirements-win311.lock.txt").read_text(encoding="utf-8")
+
+    assert "requirements-win311.lock.txt" in build
+    assert "--require-hashes" in build
+    assert "pip install --upgrade pip" not in build
+    package_lines = [
+        line for line in lock.splitlines() if re.match(r"^[A-Za-z0-9_.-]+==", line)
+    ]
+    assert len(package_lines) >= 60
+    assert lock.count("--hash=sha256:") >= len(package_lines)
+    for package in ("cryptography==50.0.2", "pywin32==312", "pyside6==6.12.0"):
+        assert package in lock
 
 
 def test_portable_marker_template_documents_single_folder_layout() -> None:
@@ -183,3 +205,9 @@ def test_installation_tutorial_covers_recommended_flow_and_lifecycle() -> None:
         "WebView2",
     ]:
         assert expected in guide
+
+
+def test_setup_helper_public_tree_contains_no_prebuilt_binary() -> None:
+    assert not (ROOT / "setup_helper" / "VISION-Create-Folders.exe").exists()
+    assert not (ROOT / "setup_helper" / "VISION-Create-Folders.exe.sha256").exists()
+    assert "source only" in (ROOT / "setup_helper" / "README.md").read_text(encoding="utf-8")

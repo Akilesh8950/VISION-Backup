@@ -266,10 +266,10 @@ class ChatController:
         image_data_url: str = "",
     ) -> TurnResult:
         previous_agent = self.tool_context.agent_auto_approve
-        previous_python = self.tool_context.auto_approve_python
+        # Agent mode may auto-approve the registry's low-risk "ask" gate,
+        # but it must never silently grant code execution.  Python stays
+        # behind its own explicit, session-only opt-in owned by the UI.
         self.tool_context.agent_auto_approve = bool(agent_mode)
-        if agent_mode:
-            self.tool_context.auto_approve_python = True
         try:
             return await self._run_turn_impl(
                 conversation_id,
@@ -286,7 +286,6 @@ class ChatController:
             )
         finally:
             self.tool_context.agent_auto_approve = previous_agent
-            self.tool_context.auto_approve_python = previous_python
 
     async def _run_turn_impl(
         self,

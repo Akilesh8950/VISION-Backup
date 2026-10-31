@@ -27,6 +27,11 @@ from vision_app.updates.service import (
     bundled_remote_config,
     compare_semver,
 )
+from vision_app.updates.signing import (
+    generate_private_key,
+    public_key_b64,
+    sign_json_payload,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,6 +42,22 @@ def _zip_bytes(files: dict[str, bytes]) -> bytes:
         for name, data in files.items():
             archive.writestr(name, data)
     return stream.getvalue()
+
+
+_TEST_SIGNING_KEY = generate_private_key()
+_TEST_SIGNING_KEY_ID = "test-1"
+_TEST_PUBLIC_KEYS = {_TEST_SIGNING_KEY_ID: public_key_b64(_TEST_SIGNING_KEY)}
+
+
+def _signed_body(payload: dict, purpose: str) -> bytes:
+    return json.dumps(
+        sign_json_payload(
+            payload,
+            _TEST_SIGNING_KEY,
+            key_id=_TEST_SIGNING_KEY_ID,
+            purpose=purpose,
+        )
+    ).encode()
 
 
 class _UpdateHandler(BaseHTTPRequestHandler):
@@ -112,7 +133,9 @@ def update_server():
     server.zip_mode = "good"  # type: ignore[attr-defined]
     server.zip_body = _zip_bytes({"VISION.exe": b"fake vision exe", "version.json": b'{"version": "9.9.9"}', "_internal/readme.txt": b"ok"})  # type: ignore[attr-defined]
     server.manifest_body = b"{}"  # type: ignore[attr-defined]
-    server.config_body = json.dumps(bundled_remote_config().model_dump(mode="json")).encode()  # type: ignore[attr-defined]
+    server.config_body = _signed_body(  # type: ignore[attr-defined]
+        bundled_remote_config().model_dump(mode="json"), "remote-config-stable"
+    )
     server.model_body = json.dumps(  # type: ignore[attr-defined]
         {"sha": "remote-model-sha", "siblings": [{"rfilename": MODEL_FILE, "size": 5_629_108_640}]}
     ).encode()
@@ -143,13 +166,14 @@ def _set_manifest(server, *, version="9.9.9", min_launcher="1.0.0", sha256: str 
         "size_bytes": len(body),
         "released_at": "2026-10-25T00:00:00Z",
     }
-    server.manifest_body = json.dumps(manifest).encode()  # type: ignore[attr-defined]
+    server.manifest_body = _signed_body(manifest, "app-manifest-stable")  # type: ignore[attr-defined]
     return body
 
 
 def _service(tmp_path: Path, server, **kwargs) -> UpdateService:
     kwargs.setdefault("enabled", True)
     kwargs.setdefault("model_smoke_runner", lambda _path: None)
+    kwargs.setdefault("release_public_keys", _TEST_PUBLIC_KEYS)
     return UpdateService(
         root=tmp_path / "install",
         manifest_url=f"{_base(server)}/latest.json",
@@ -232,6 +256,64 @@ def test_malformed_manifest_is_rejected(tmp_path, update_server):
     assert result.app.installed_version == "1.0.0"
 
 
+def test_unsigned_and_tampered_manifests_are_rejected(tmp_path, update_server):
+    _set_manifest(update_server)
+    signed = json.loads(update_server.manifest_body)  # type: ignore[attr-defined]
+
+    unsigned = {
+        key: value
+        for key, value in signed.items()
+        if not key.startswith("signature")
+    }
+    update_server.manifest_body = json.dumps(unsigned).encode()  # type: ignore[attr-defined]
+    service = _service(tmp_path, update_server)
+    with pytest.raises(UpdateValidationError, match="signature"):
+        service.fetch_manifest()
+
+    tampered = dict(signed)
+    tampered["notes"] = "Tampered after signing"
+    update_server.manifest_body = json.dumps(tampered).encode()  # type: ignore[attr-defined]
+    with pytest.raises(UpdateValidationError, match="signature"):
+        service.fetch_manifest()
+
+    update_server.manifest_body = json.dumps(signed).encode()  # type: ignore[attr-defined]
+    unconfigured = _service(tmp_path, update_server, release_public_keys={})
+    with pytest.raises(UpdateValidationError, match="not configured"):
+        unconfigured.fetch_manifest()
+
+
+def test_unsigned_remote_config_is_rejected(tmp_path, update_server):
+    _set_manifest(update_server)
+    update_server.config_body = json.dumps(  # type: ignore[attr-defined]
+        bundled_remote_config().model_dump(mode="json")
+    ).encode()
+    service = _service(tmp_path, update_server)
+
+    result = service.check_all()
+
+    assert result.config.status == "failed"
+    assert "rejected" in result.config.error
+
+
+def test_signed_remote_config_cache_preserves_exact_signed_payload(tmp_path, update_server):
+    payload = bundled_remote_config().model_dump(mode="json")
+    payload["version"] = "remote-cache"
+    # Validation truncates this to 500 chars.  If the cache wrote model_dump
+    # instead of the exact verified object, its signature would not verify
+    # after a restart.
+    payload["ui_strings"]["hero_title"] = "X" * 600
+    update_server.config_body = _signed_body(payload, "remote-config-stable")  # type: ignore[attr-defined]
+    service = _service(tmp_path, update_server)
+
+    service.refresh_config(apply=True)
+
+    assert service.active_config.version == "remote-cache"
+    assert len(service.active_config.ui_strings["hero_title"]) == 500
+    reloaded = _service(tmp_path, update_server)
+    assert reloaded.active_config.version == "remote-cache"
+    assert len(reloaded.active_config.ui_strings["hero_title"]) == 500
+
+
 def test_min_launcher_requires_manual_install(tmp_path, update_server):
     _set_manifest(update_server, min_launcher="99.0.0")
     service = _service(tmp_path, update_server)
@@ -242,6 +324,20 @@ def test_min_launcher_requires_manual_install(tmp_path, update_server):
     assert "manually" in result.app.error
     with pytest.raises(UpdateError, match="manually"):
         service.download("9.9.9")
+
+
+def test_non_writable_update_root_fails_before_archive_download(tmp_path, update_server):
+    _set_manifest(update_server)
+    (tmp_path / "install").write_text("not a directory", encoding="utf-8")
+    service = _service(tmp_path, update_server)
+
+    result = service.check_all()
+
+    assert result.app.status == "failed"
+    assert "could not write" in result.app.error
+    with pytest.raises(UpdateError, match="could not write"):
+        service.download("9.9.9")
+    assert update_server.zip_requests == 0  # type: ignore[attr-defined]
 
 
 def test_local_999_end_to_end_resume_extract_and_pending(tmp_path, update_server):
@@ -316,7 +412,9 @@ def test_remote_config_validation_and_live_apply(tmp_path, update_server):
     remote.system_prompt = "You are VISION, a helpful desktop assistant built by SPIRIT ORG. Remote proof prompt."
     remote.tool_schemas[0].description = "Remote proof tool description."
     remote.ui_strings["hero_title"] = "Remote proof title"
-    update_server.config_body = json.dumps(remote.model_dump(mode="json")).encode()  # type: ignore[attr-defined]
+    update_server.config_body = _signed_body(  # type: ignore[attr-defined]
+        remote.model_dump(mode="json"), "remote-config-stable"
+    )
     applied = []
     service = _service(tmp_path, update_server, on_config_applied=applied.append)
 
@@ -426,6 +524,21 @@ def test_launcher_rejects_traversal_version_in_current_selection(tmp_path):
     assert (root / "versions").resolve() in invalid_path.parents
 
 
+def test_launcher_lock_is_exclusive(tmp_path):
+    launcher = _load_launcher()
+    first = launcher.acquire_launcher_lock(tmp_path)
+    try:
+        assert first is not None
+        assert launcher.acquire_launcher_lock(tmp_path) is None
+    finally:
+        launcher.release_launcher_lock(first)
+    second = launcher.acquire_launcher_lock(tmp_path)
+    try:
+        assert second is not None
+    finally:
+        launcher.release_launcher_lock(second)
+
+
 def test_launcher_consumes_pending_only_after_child_exit(tmp_path):
     launcher = _load_launcher()
     root = _launcher_install(tmp_path, ["1.0.0", "1.1.0"], "1.0.0")
@@ -505,7 +618,7 @@ def test_release_script_and_updates_ui_contract():
 def _rewrite_manifest(server, **overrides):
     manifest = json.loads(server.manifest_body)  # type: ignore[attr-defined]
     manifest.update(overrides)
-    server.manifest_body = json.dumps(manifest).encode()  # type: ignore[attr-defined]
+    server.manifest_body = _signed_body(manifest, "app-manifest-stable")  # type: ignore[attr-defined]
 
 
 def test_channel_mismatch_is_refused_with_one_clear_line(tmp_path, update_server):
@@ -570,6 +683,32 @@ def test_manifest_requires_bounded_positive_size(payload):
 
     with pytest.raises(ValidationError):
         AppManifest.model_validate(payload)
+
+
+def test_connector_oauth_urls_must_be_https_without_credentials():
+    from pydantic import ValidationError
+
+    from vision_app.updates.service import ConnectorOAuthConfig
+
+    valid = ConnectorOAuthConfig(
+        authorize_url="https://auth.example/authorize?prompt=consent",
+        token_url="https://auth.example/token",
+        client_id="vision",
+    )
+    assert valid.authorize_url.startswith("https://")
+    for field, value in (
+        ("authorize_url", "http://auth.example/authorize"),
+        ("authorize_url", "file:///C:/Windows/win.ini"),
+        ("token_url", "https://user:pass@example.com/token"),
+    ):
+        payload = {
+            "authorize_url": "https://auth.example/authorize",
+            "token_url": "https://auth.example/token",
+            "client_id": "vision",
+        }
+        payload[field] = value
+        with pytest.raises(ValidationError):
+            ConnectorOAuthConfig.model_validate(payload)
 
 
 def test_size_mismatch_aborts_without_staging(tmp_path, update_server):
@@ -673,6 +812,24 @@ def test_validate_gguf_magic_and_size(tmp_path):
     assert validate_gguf(good, min_bytes=10) is True
     assert validate_gguf(bad, min_bytes=10) is False
     assert validate_gguf(good, min_bytes=10_000) is False
+
+
+def test_model_smoke_ram_gate_never_starts_a_second_server(tmp_path, monkeypatch):
+    from vision_app.updates import model_verify
+
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"GGUF" + b"x" * 100)
+    monkeypatch.setattr(model_verify, "_available_ram_bytes", lambda: 1)
+    monkeypatch.setattr(
+        model_verify.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not start")),
+    )
+
+    result = model_verify.run_model_smoke_test(tmp_path / "llama-server", model)
+
+    assert result.ok is False
+    assert "insufficient available RAM" in result.reason
 
 
 class _FakeModelHandler(BaseHTTPRequestHandler):

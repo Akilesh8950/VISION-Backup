@@ -16,7 +16,7 @@ from pydantic import BaseModel, ValidationError
 from ..constants import SAFETY_BLOCK_MESSAGE
 
 # Agent mode never auto-approves these, even for builtin tools.
-_AGENT_NEVER_AUTO_APPROVE = {"open_path", "open_app"}
+_AGENT_NEVER_AUTO_APPROVE = {"open_path", "open_app", "open_url", "run_python"}
 from ..logging_setup import AuditLog
 from ..redaction import redact_value
 from ..transport.schemas import ToolCall

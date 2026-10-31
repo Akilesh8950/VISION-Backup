@@ -33,3 +33,33 @@ def test_checkpoint_restore_and_user_test_profile(tmp_path):
 
     result = run_test_profile({"program": sys.executable, "args": ["-c", "print('ok')"], "cwd": str(tmp_path)})
     assert result["exit_code"] == 0 and "ok" in result["stdout"]
+
+
+def test_checkpoint_retention_caps_count_and_total_bytes(tmp_path):
+    target = tmp_path / "code.py"
+    count_manager = CheckpointManager(
+        tmp_path / "count-checkpoints", max_checkpoints=3, max_total_bytes=10_000_000
+    )
+    ids = []
+    for index in range(5):
+        target.write_text(str(index) * 100)
+        ids.append(count_manager.snapshot(target))
+    assert [item["id"] for item in count_manager.list()] == list(reversed(ids[-3:]))
+
+    size_manager = CheckpointManager(
+        tmp_path / "size-checkpoints", max_checkpoints=100, max_total_bytes=1800
+    )
+    size_ids = []
+    for index in range(4):
+        target.write_text(str(index) * 500)
+        size_ids.append(size_manager.snapshot(target))
+    retained = [item["id"] for item in size_manager.list()]
+    assert retained[-1] == size_ids[-1] or retained[0] == size_ids[-1]
+    assert len(retained) < len(size_ids)
+    total = sum(
+        child.stat().st_size
+        for directory in (tmp_path / "size-checkpoints").iterdir()
+        for child in directory.iterdir()
+        if child.is_file()
+    )
+    assert total <= 1800

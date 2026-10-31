@@ -10,8 +10,17 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 if (-not $SkipInstall) {
-    & $Python -m pip install --upgrade pip
-    & $Python -m pip install -r requirements.txt
+    if ($env:OS -ne "Windows_NT") {
+        throw "The hash-locked release dependencies target Windows. Run this build on Windows, or pass -SkipInstall after preparing a compatible environment."
+    }
+    $PythonVersion = (& $Python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+    if ($LASTEXITCODE -ne 0 -or $PythonVersion -ne "3.11") {
+        throw "Release builds require 64-bit CPython 3.11 so requirements-win311.lock.txt can be verified exactly; detected '$PythonVersion'."
+    }
+    # Do not upgrade pip here: an unpinned self-upgrade would bypass the
+    # hash-locked supply chain used for every packaged dependency.
+    & $Python -m pip install --require-hashes -r requirements-win311.lock.txt
+    if ($LASTEXITCODE -ne 0) { throw "Hash-locked dependency installation failed with exit code $LASTEXITCODE" }
 }
 
 if ($BuildFrontend) {

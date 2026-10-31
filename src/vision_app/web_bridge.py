@@ -409,6 +409,7 @@ class VisionWebApi:
             on_error=lambda text: self._emit("error", {"message": str(text)}),
         )
         self.tool_context.confirm = self._confirm
+        self.tool_context.auto_approve_python = False
         self.tool_context.timer_callback = self._schedule_timer
         self.server_manager.on_log(lambda line: self._emit("server_log", {"line": line}))
 
@@ -518,6 +519,19 @@ class VisionWebApi:
             "recommended_profile": recommended_profile(hardware),
             "effective_profile": effective_profile(self.config.performance_profile, hardware),
         }
+
+    def _tool_safety_payload(self) -> dict[str, Any]:
+        return {
+            "python_auto_approve": bool(
+                getattr(self.tool_context, "auto_approve_python", False)
+            )
+        }
+
+    def set_python_auto_approve(self, enabled: bool) -> dict[str, Any]:
+        """Set the separate session-only Python opt-in (never persisted)."""
+
+        self.tool_context.auto_approve_python = bool(enabled)
+        return {"ok": True, "tool_safety": self._tool_safety_payload()}
 
     def _config_payload(self) -> dict[str, Any]:
         # Do not add derived internal URLs to the UI payload, and do not
@@ -1131,6 +1145,7 @@ class VisionWebApi:
             "library_count": self.library.count() if self.library is not None else 0,
             "updates": self._updates_payload(),
             "live": self._live_capabilities(),
+            "tool_safety": self._tool_safety_payload(),
             "chat_busy": self._chat_busy,
         }
 
@@ -2081,6 +2096,7 @@ class VisionWebApi:
             "available_models": self._available_models(),
             "hardware": self._hardware_payload(),
             "live": self._live_capabilities(),
+            "tool_safety": self._tool_safety_payload(),
         }
 
     @staticmethod
@@ -2241,6 +2257,22 @@ class VisionWebApi:
                 continue
             updated[key] = payload[key]
         validated = AppConfig.model_validate(updated)
+        supplied_remote = payload.get("remote_base_url")
+        if (
+            not payload.get("clear_remote_base_url")
+            and isinstance(supplied_remote, str)
+            and supplied_remote.strip()
+            and not validated.remote_base_url
+        ):
+            return {
+                "ok": False,
+                "message": (
+                    "Backup connection addresses must be valid HTTPS URLs "
+                    "without embedded credentials (HTTP is allowed only for "
+                    "localhost). Settings were not saved."
+                ),
+                "config": self._config_payload(),
+            }
         restart_relevant = {"local_port", "context_size", "gpu_layers", "performance_profile", "model_path", "llama_server_path", "mmproj_path"}
         restart_needed = any(getattr(validated, key) != getattr(self.config, key) for key in restart_relevant)
         for key, value in validated.model_dump(mode="python").items():
@@ -3022,9 +3054,15 @@ class VisionWebApi:
                 parsed = urllib_parse.urlparse(self.path)
                 params = urllib_parse.parse_qs(parsed.query)
                 if parsed.path == "/callback":
-                    if (params.get("state") or [""])[0] == state:
-                        outcome["code"] = (params.get("code") or [""])[0]
-                        outcome["error"] = (params.get("error") or [""])[0]
+                    returned_state = (params.get("state") or [""])[0]
+                    if not _secrets.compare_digest(returned_state, state):
+                        # Ignore stray/forged loopback hits: only the exact
+                        # one-time state may complete (or fail) this flow.
+                        self.send_response(400)
+                        self.end_headers()
+                        return
+                    outcome["code"] = (params.get("code") or [""])[0]
+                    outcome["error"] = (params.get("error") or [""])[0]
                     body = b"VISION sign-in received. You can close this tab."
                     self.send_response(200)
                     self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -3056,7 +3094,8 @@ class VisionWebApi:
                     "code_challenge_method": "S256",
                 }
             )
-            webbrowser.open(f"{oauth.authorize_url}?{query}")
+            separator = "&" if "?" in oauth.authorize_url else "?"
+            webbrowser.open(f"{oauth.authorize_url}{separator}{query}")
             if not done.wait(timeout=180):
                 raise RuntimeError("Sign-in timed out after 3 minutes")
             if outcome.get("error") or not outcome.get("code"):

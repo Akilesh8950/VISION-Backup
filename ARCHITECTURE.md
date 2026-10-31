@@ -240,9 +240,9 @@ metadata.  The model channel talks exclusively to Hugging Face.
 
 | Channel | Source | Apply timing | Safety boundary |
 |---|---|---|---|
-| App | `latest.json` / `latest-dev.json` on `main`, pointing to a GitHub Release ZIP | Download in the background; apply only after the user chooses **Restart to apply** | SemVer + SHA-256 + safe ZIP extraction + `VISION.exe` check; launcher consumes `pending.json` only after process exit |
+| App | `latest.json` / `latest-dev.json` on `main`, pointing to a GitHub Release ZIP | Download in the background; apply only after the user chooses **Restart to apply** | Ed25519 manifest verification + SemVer + SHA-256 + safe ZIP extraction + `VISION.exe` check; launcher consumes `pending.json` only after process exit |
 | Model | Hugging Face model metadata for `SpiritKing/VISION-Ornith-1.5-9B-GGUF` | Stage now; activate on next launch | Existing resumable `hf_hub_download` path, expected-size check, >5,000,000,000 byte floor, pending-model swap before `llama-server` starts |
-| Config | `updates/config.json` / `updates/config-dev.json` on `main` | Live, without restart | Pydantic validation; complete 27-tool schema set; malformed data rejected and bundled/cached config stays active |
+| Config | `updates/config.json` / `updates/config-dev.json` on `main` | Live, without restart | Ed25519 config verification + Pydantic validation; complete 27-tool schema set; malformed or unsigned data rejected and bundled/previously verified cached config stays active |
 
 `APP_VERSION` is `1.0.0`.  The stable app manifest is
 `https://raw.githubusercontent.com/Akilesh8950/VISION/main/latest.json`; the
@@ -325,13 +325,17 @@ valid cached config remains live.
    `python -m pytest tests/test_updates.py -q` (its local HTTP server
    advertises a fake `9.9.9` app release and proves resume, hash handling,
    safe extraction, pending handoff, and launcher rollback).
-3. On Windows, run `scripts\release.ps1 -BuildFrontend -Notes "..."`.  It
-   builds the app through the existing PyInstaller `--onedir` path (never
-   `--onefile` for the app payload), builds the launcher, zips the version
-   payload, hashes it with `Get-FileHash`, and rewrites `latest.json` or
-   `latest-dev.json`.
-4. Inspect the ZIPs, then re-run with `-Publish` so `gh release upload`
-   publishes the assets.  Commit/push the rewritten manifest only after the
+3. On Windows, run `scripts\release.ps1` with `-BuildFrontend`, the
+   owner-held offline `-SigningKey`, its `-SigningKeyId`, and `-SignConfig`
+   when the remote config changed.  It builds the app through the existing
+   PyInstaller `--onedir` path (never `--onefile` for the app payload), uses
+   the hash-locked Windows/Python 3.11 dependencies, builds the launcher,
+   zips the version payload, hashes it with `Get-FileHash`, rewrites
+   `latest.json` or `latest-dev.json`, and signs the update JSON.  See
+   `docs/RELEASE_SIGNING.md` for the key ceremony and rotation rules.
+4. Inspect the ZIPs, then re-run with `-Publish` and the same signing
+   options so `gh release upload` publishes the assets.  `-Publish` refuses
+   an unsigned manifest.  Commit/push the signed manifest only after the
    upload succeeds; otherwise clients would see a manifest whose asset does
    not exist yet.
 5. Installs that predate the launcher layout need one run of the new setup
@@ -339,10 +343,9 @@ valid cached config remains live.
    launcher + `versions\` tree.  After that, app updates are staged by the
    running app and applied by the outer launcher.
 
-`setup_helper\VISION-Create-Folders.exe` is a separate convenience for the
-manual build tutorial: the user picks one parent folder and it creates
-`VISION-Source` (source/build only) and `VISION` (final install only).  It
-does not download or install VISION.
+The public tree intentionally contains no prebuilt setup-helper executable.
+`setup_helper` remains source-only for a future owner-verified Windows build;
+the standard installer and manual folder creation do not depend on it.
 
 ## 10. Feedback telemetry and unified sync
 
@@ -527,12 +530,16 @@ on real Windows hardware (see `docs\WINDOWS_SMOKE_TEST.md`).
 **Agentic mode.** The composer has a Chat | Agent toggle (also `/agent`).
 An Agent turn adds a plan-act-verify system addendum, raises the tool-loop
 budget from 8 rounds to `agent_max_steps` (default 30, clamped 1-100), and
-enables two scoped auto-approvals for that turn only: `run_python` previews
-run without asking, and registry-level "ask" prompts for builtin tools are
-auto-approved (never `open_path`/`open_app`). MCP/connector tools still ask
-every time unless the user preset them to Allow, and tool-level safety
-confirmations (outside-workspace writes, executable opens, large clipboard
-sets) still interrupt. Flags are restored in a `finally` block.
+auto-approves only the registry-level "ask" gate for low-risk builtin tools
+for that turn. It never grants Python execution by itself: `run_python`
+still shows a preview unless the user has separately enabled the explicit,
+session-only Python opt-in in Settings → Tools. Every model-requested
+`open_path`, `open_app`, and `open_url` launch asks first. MCP/connector
+tools still ask every time unless the user preset them to Allow, and
+tool-level safety confirmations (outside-workspace writes, launches, and
+large clipboard sets) still interrupt. The Agent flag is restored in a
+`finally` block; the separate Python flag is not persisted and resets to off
+on the next process start.
 
 **MCP client completion.** Sessions are created with `client_info`
 "VISION", a per-server `timeout_seconds` (5-600), a logging callback
@@ -551,7 +558,9 @@ advertised only when usable:
 
 **React management UI (Settings -> Tools).** Full add/edit/delete for MCP
 servers (stdio, Streamable HTTP, SSE) and connectors (remote; auth none /
-API-key header / Bearer). Secrets entered in the UI go straight to Windows
+API-key header / Bearer). Enabled remote MCP/connector records and the
+backup model endpoint require HTTPS outside loopback, and URLs may not
+contain embedded credentials. Secrets entered in the UI go straight to Windows
 Credential Manager as `EXT_<ID>_KEY`; the JSON files keep only credential
 references, and the editor never receives secret values back. Changing where
 a server connects resets its trusted toolset fingerprint. Discovered

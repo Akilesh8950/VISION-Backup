@@ -16,6 +16,8 @@ GGUF_MAGIC = b"GGUF"
 MIN_MODEL_BYTES = 5_000_000_000
 SMOKE_PORT = 18081
 SMOKE_TIMEOUT_SECONDS = 120.0
+SMOKE_CONTEXT_SIZE = 4096
+SMOKE_RAM_OVERHEAD_BYTES = 1536 * 1024 * 1024
 
 
 @dataclass
@@ -34,6 +36,15 @@ def validate_gguf(path: Path, *, min_bytes: int = MIN_MODEL_BYTES) -> bool:
             return handle.read(4) == GGUF_MAGIC
     except OSError:
         return False
+
+
+def _available_ram_bytes() -> int | None:
+    try:
+        import psutil  # type: ignore
+
+        return int(psutil.virtual_memory().available)
+    except Exception:
+        return None
 
 
 def _chat(base_url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
@@ -117,21 +128,40 @@ def run_model_smoke_test(
     *,
     timeout: float = SMOKE_TIMEOUT_SECONDS,
     port: int = SMOKE_PORT,
+    context_size: int = SMOKE_CONTEXT_SIZE,
+    gpu_layers: int = 0,
 ) -> ModelSmokeResult:
-    """Start a throwaway llama-server on a side port and smoke-test the GGUF.
+    """Start a bounded throwaway llama-server and smoke-test the GGUF.
 
-    The user's running server on the normal port is never touched, so a
-    pending model can be proven before it is activated on next launch.
+    The side server is CPU-only with a 4k context by default.  That proves
+    the downloaded weights/template/tool behaviour without allocating a
+    second multi-gigabyte GPU copy beside the user's running server.  A RAM
+    preflight accounts for whatever the normal server is already using.
     """
+    try:
+        model_bytes = int(model_path.stat().st_size)
+    except OSError as exc:
+        return ModelSmokeResult(False, f"could not read model: {exc}")
+    available_ram = _available_ram_bytes()
+    required_ram = model_bytes + SMOKE_RAM_OVERHEAD_BYTES
+    if available_ram is not None and available_ram < required_ram:
+        return ModelSmokeResult(
+            False,
+            "insufficient available RAM for a safe model smoke test; "
+            "close the running model server or other large apps and retry",
+        )
     command = [
         str(server_executable),
         "-m", str(model_path),
         "--host", "127.0.0.1",
         "--port", str(port),
-        "-c", "16384",
-        "-ngl", "99",
+        "-c", str(max(1024, int(context_size))),
+        "-ngl", str(max(0, int(gpu_layers))),
         "--jinja",
         "--flash-attn", "on",
+        "-np", "1",
+        "--cache-type-k", "q8_0",
+        "--cache-type-v", "q8_0",
     ]
     base_url = f"http://127.0.0.1:{port}"
     deadline = time.monotonic() + max(10.0, timeout)
@@ -170,6 +200,7 @@ def run_model_smoke_test(
 __all__ = [
     "GGUF_MAGIC",
     "MIN_MODEL_BYTES",
+    "SMOKE_CONTEXT_SIZE",
     "ModelSmokeResult",
     "run_model_smoke_test",
     "run_smoke_against",

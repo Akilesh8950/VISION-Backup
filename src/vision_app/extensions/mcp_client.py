@@ -295,20 +295,21 @@ class McpClientManager:
                 last_user = next(
                     (item["content"] for item in reversed(messages) if item["role"] == "user"), ""
                 )
-                if manager.confirm_user is not None:
-                    approved = await asyncio.to_thread(
-                        manager.confirm_user,
-                        f"{config.display_name} wants VISION to generate text",
-                        "An MCP server asked VISION's model to generate text. "
-                        "Only allow this if you trust this server:",
-                        {
-                            "server": config.id,
-                            "prompt": last_user[:1000],
-                            "max_tokens": max_tokens,
-                        },
-                    )
-                    if not approved:
-                        raise RuntimeError("User declined sampling")
+                if manager.confirm_user is None:
+                    raise RuntimeError("Sampling requires interactive user approval")
+                approved = await asyncio.to_thread(
+                    manager.confirm_user,
+                    f"{config.display_name} wants VISION to generate text",
+                    "An MCP server asked VISION's model to generate text. "
+                    "Only allow this if you trust this server:",
+                    {
+                        "server": config.id,
+                        "prompt": last_user[:1000],
+                        "max_tokens": max_tokens,
+                    },
+                )
+                if not approved:
+                    raise RuntimeError("User declined sampling")
                 text = await asyncio.to_thread(manager.sampler, messages, max_tokens)
                 result_kwargs: dict[str, Any] = {
                     "role": "assistant",
@@ -381,7 +382,7 @@ class McpClientManager:
                 extras["client_info"] = mcp_types.Implementation(name="VISION", version="1.0.0")
             except Exception:
                 pass
-            if config.allow_sampling and manager.sampler is not None:
+            if config.allow_sampling and manager.sampler is not None and manager.confirm_user is not None:
                 extras["sampling_callback"] = sampling_callback
             if config.allow_elicitation and manager.elicit_user is not None:
                 extras["elicitation_callback"] = elicitation_callback

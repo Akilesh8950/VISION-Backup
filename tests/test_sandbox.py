@@ -31,6 +31,12 @@ def test_executable_open_requires_confirmation(tmp_path):
     assert sandbox.needs_confirmation("tool.exe", resolved, action="open")
 
 
+def test_every_model_open_requires_confirmation_even_for_plain_text(tmp_path):
+    sandbox = PathSandbox(tmp_path)
+    resolved = sandbox.resolve("notes.txt")
+    assert sandbox.needs_confirmation("notes.txt", resolved, action="open")
+
+
 def test_shell_actionable_open_suffixes_require_confirmation(tmp_path):
     sandbox = PathSandbox(tmp_path)
     for name in (
